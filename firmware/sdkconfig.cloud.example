@@ -1,0 +1,8 @@
+# Overlay for the cloud gateway build. Copy to a file you do NOT commit (it holds your gateway token),
+# fill in the Worker URL and token, and add it LAST to SDKCONFIG_DEFAULTS.
+CONFIG_MUSE_STT_URL="https://YOUR-WORKER.workers.dev/stt?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_BRAIN_URL="https://YOUR-WORKER.workers.dev/chat?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_TTS_URL="https://YOUR-WORKER.workers.dev/tts?k=YOUR_GATEWAY_TOKEN"
+# Cloudflare serves a GlobalSign cross-signed Google Trust Services chain; without this the TLS handshake
+# fails with "Failed to verify certificate" (-0x3000).
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

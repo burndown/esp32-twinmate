@@ -1,0 +1,15 @@
+name = "muse-gateway"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# 1. npx wrangler kv namespace create muse-gateway-cfg      -> put the printed id below
+# 2. npx wrangler secret put GATEWAY_TOKEN                   -> a long random string; the firmware sends it as ?k=
+# 3. (optional) npx wrangler secret put DASHSCOPE_API_KEY    -> or enter every key on the /admin page instead
+[[kv_namespaces]]
+binding = "CFG"
+id = "REPLACE_WITH_KV_ID"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
