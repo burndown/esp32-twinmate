@@ -1,8 +1,16 @@
-# Overlay for the cloud gateway build. Copy to a file you do NOT commit (it holds your gateway token),
-# fill in the Worker URL and token, and add it LAST to SDKCONFIG_DEFAULTS.
-CONFIG_MUSE_STT_URL="https://YOUR-WORKER.workers.dev/stt?k=YOUR_GATEWAY_TOKEN"
-CONFIG_MUSE_BRAIN_URL="https://YOUR-WORKER.workers.dev/chat?k=YOUR_GATEWAY_TOKEN"
-CONFIG_MUSE_TTS_URL="https://YOUR-WORKER.workers.dev/tts?k=YOUR_GATEWAY_TOKEN"
-# Cloudflare serves a GlobalSign cross-signed Google Trust Services chain; without this the TLS handshake
-# fails with "Failed to verify certificate" (-0x3000).
+# Overlay for the gateway build. Copy to a file you do NOT commit (it holds your gateway token), fill it in and add it
+# LAST to SDKCONFIG_DEFAULTS.
+#
+# Recommended layout (what the author runs): everything on the LAN, a home gateway (see home/) next to a local speech server.
+#   speech recognition: the local server first, the gateway as a backup if the local one fails or takes over 5 s
+CONFIG_MUSE_STT_URL="http://YOUR_LAN_IP:5006/stt"
+CONFIG_MUSE_STT_FALLBACK_URL="http://YOUR_LAN_IP:8787/stt?k=YOUR_GATEWAY_TOKEN"
+#   the answer and the speech always come from the gateway
+CONFIG_MUSE_BRAIN_URL="http://YOUR_LAN_IP:8787/chat?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_TTS_URL="http://YOUR_LAN_IP:8787/tts?k=YOUR_GATEWAY_TOKEN"
+# How long to wait for Muse's first reply before the gateway's model answers instead (seconds, default 30)
+CONFIG_MUSE_BRAIN_GIVEUP_SECONDS=60
+#
+# Cloud-only layout instead: point all three at the Cloudflare Worker (https://YOUR-WORKER.workers.dev/...). Cloudflare serves
+# a GlobalSign cross-signed Google Trust Services chain; without the next line the TLS handshake fails (-0x3000).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

@@ -8,17 +8,19 @@ const DEFAULTS = {
           "不要使用 Markdown、列表、编号、表情符号或括号说明，因为你的话会被直接读出来。" +
           "用户用什么语言提问，你就用什么语言回答。需要最新信息时先联网搜索。",
   history_turns: 6,
+  muse_mode: false,   // true: /chat answers 503 so the firmware asks Muse itself (recognition and speech stay here)
   max_tokens: 4000,
   llm: { provider: "dashscope", model: "qwen-plus", search: true, base_url: "", extra: "" },
-  tts: { provider: "cosyvoice", model: "cosyvoice-v2", voice: "longxiaochun_v2", cluster: "volcano_tts" },
-  asr: { provider: "qwen3-asr-flash", model: "qwen3-asr-flash" },
+  tts: { provider: "cosyvoice", model: "cosyvoice-v2", voice: "longxiaochun_v2", cluster: "volcano_tts", region: "eastasia" },
+  asr: { provider: "qwen3-asr-flash", model: "qwen3-asr-flash", url: "" },
 };
 const DASHSCOPE = "https://dashscope.aliyuncs.com";
 const ARK = "https://ark.cn-beijing.volces.com/api/v3";
 const VOLC_SPEECH = "https://openspeech.bytedance.com";
 // secret name -> env fallback
 const SECRET_NAMES = { dashscope_key: "DASHSCOPE_API_KEY", ark_key: "ARK_API_KEY", deepseek_key: "DEEPSEEK_API_KEY",
-  custom_key: "CUSTOM_LLM_KEY", volc_appid: "VOLC_APPID", volc_token: "VOLC_TOKEN" };
+  custom_key: "CUSTOM_LLM_KEY", volc_appid: "VOLC_APPID", volc_token: "VOLC_TOKEN",
+  azure_key: "AZURE_SPEECH_KEY", homebox_token: "HOMEBOX_ASR_TOKEN" };
 
 async function loadAll(env) {
   let over = null, sec = null;
@@ -57,6 +59,18 @@ function wav(pcm, rate) {
 // audio: wav or mp3 bytes. Returns recognised text ("" for silence).
 async function recognise(cfg, S, audio, mime) {
   const A = cfg.asr;
+  if (A.provider === "homebox") {
+    // The speech server at home (SenseVoice) takes WAV or raw PCM; it is reached through a Cloudflare Tunnel hostname
+    // that sits in front of a small token-checking gate.
+    if (!A.url) throw new Error("homebox ASR url not set");
+    if (mime !== "audio/wav") throw new Error("homebox ASR takes WAV only");
+    const hdr = { "content-type": "audio/wav", "X-Sample-Rate": "16000" };
+    if (S.homebox_token) hdr.Authorization = "Bearer " + S.homebox_token;   // the tunnel gate needs it; the LAN server does not
+    const r = await fetch(A.url, { method: "POST", headers: hdr, body: audio });
+    if (!r.ok) throw new Error("homebox asr http " + r.status);
+    const d = await r.json();
+    return (d.text || "").trim();
+  }
   if (A.provider === "volcengine") {
     if (!S.volc_appid || !S.volc_token) throw new Error("volcengine speech app id / token not set");
     const r = await fetch(VOLC_SPEECH + "/api/v3/auc/bigmodel/recognize/flash", {
@@ -154,7 +168,10 @@ async function llmStream(cfg, S, messages) {
 }
 
 async function chat(req, env, all, ctx) {
-  const { text: userText } = await req.json().catch(() => ({}));
+  const { text: userText, muse_down: museDown } = await req.json().catch(() => ({}));
+  // Muse mode: the first ask is answered with 503 so the firmware sends the text to Muse. If Muse stays silent for 30 s
+  // the firmware asks again with muse_down:true, and then the configured model answers instead of failing the turn.
+  if (all.cfg.muse_mode && !museDown) return json({ muse: true }, 503);
   if (!userText) return json({ error: "no text" }, 400);
   const { cfg, S } = all;
   const hKey = "h:" + (req.headers.get("x-device") || "muse-gadget");
@@ -171,16 +188,16 @@ async function chat(req, env, all, ctx) {
 }
 
 // ---- TTS ---------------------------------------------------------------------------------------------
-function splitText(t) {
+function splitText(t, [minLen, maxLen] = [10, 40]) {
   // Cut after every stop or comma, then merge tiny pieces: ~10..40 characters each, so even one long sentence
   // is synthesised in parallel (CosyVoice runs at roughly 0.6x real time per request).
   const raw = t.replace(/\s+/g, " ").match(/[^。！？!?；;，,、\n]+[。！？!?；;，,、]*/g) || [t];
   const out = [];
   let cur = "";
   for (const piece of raw) {
-    if (cur && cur.length + piece.length > 40) { out.push(cur.trim()); cur = ""; }
+    if (cur && cur.length + piece.length > maxLen) { out.push(cur.trim()); cur = ""; }
     cur += piece;
-    if (cur.length >= 10) { out.push(cur.trim()); cur = ""; }
+    if (cur.length >= minLen) { out.push(cur.trim()); cur = ""; }
   }
   if (cur.trim()) { if (out.length && cur.length < 6) out[out.length - 1] += cur; else out.push(cur.trim()); }
   return out.filter((x) => x.length);
@@ -242,13 +259,44 @@ async function synthVolc(cfg, S, t) {
   return unb64(d.data);
 }
 
+const xmlEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+async function synthAzure(cfg, S, t) {
+  if (!S.azure_key) throw new Error("azure speech key not set");
+  const T = cfg.tts;
+  const host = (T.region || "eastasia").includes(".") ? T.region : `${T.region || "eastasia"}.tts.speech.microsoft.com`;
+  const lang = (T.voice || "zh-CN-XiaoxiaoNeural").split("-").slice(0, 2).join("-");
+  const ssml = `<speak version='1.0' xml:lang='${lang}'><voice name='${T.voice || "zh-CN-XiaoxiaoNeural"}'>${xmlEsc(t)}</voice></speak>`;
+  const r = await fetch(`https://${host}/cognitiveservices/v1`, {
+    method: "POST",
+    headers: { "Ocp-Apim-Subscription-Key": S.azure_key, "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3", "User-Agent": "muse-gateway" },
+    body: ssml,
+  });
+  if (!r.ok) throw new Error("azure tts http " + r.status + " " + (await r.text().catch(() => "")).slice(0, 120));
+  const out = new Uint8Array(await r.arrayBuffer());
+  if (!out.length) throw new Error("no audio");
+  return out;
+}
+
 async function synthAll(cfg, S, t) {
-  const one = cfg.tts.provider === "volcengine" ? synthVolc : synthCosy;   // volcengine free tier: 2 concurrent requests
-  const pieces = splitText(t);
+  const prov = cfg.tts.provider;
+  const one = prov === "azure" ? synthAzure : prov === "volcengine" ? synthVolc : synthCosy;   // volcengine free tier: 2 concurrent requests
+  const pieces = splitText(t, prov === "azure" ? [30, 110] : prov === "volcengine" ? [10, 40] : [20, 70]);   // Azure sounds better on whole sentences and the free tier allows few requests per minute
   const results = new Array(pieces.length);
   let next = 0;
-  const worker = async () => { while (next < pieces.length) { const i = next++; results[i] = await one(cfg, S, pieces[i]); } };
-  await Promise.all(Array.from({ length: Math.min(cfg.tts.provider === "volcengine" ? 2 : 6, pieces.length) }, worker));
+  // The vendors rate-limit short bursts (Alibaba answers Throttling.RateQuota): back off and retry instead of failing the whole reply.
+  const withRetry = async (piece) => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await one(cfg, S, piece); }
+      catch (e) {
+        if (attempt >= 3 || !/Throttl|rate|quota|429|limit/i.test(String(e))) throw e;
+        await new Promise((r) => setTimeout(r, 350 * 2 ** attempt));
+      }
+    }
+  };
+  const worker = async () => { while (next < pieces.length) { const i = next++; results[i] = await withRetry(pieces[i]); } };
+  await Promise.all(Array.from({ length: Math.min(prov === "azure" ? 3 : 2, pieces.length) }, worker));
   const bodies = results.map((r, i) => (i ? stripId3(r) : r));
   const total = bodies.reduce((n, b) => n + b.length, 0);
   const out = new Uint8Array(total); let o = 0;
@@ -277,7 +325,7 @@ async function admin(req, env, url, all) {
   if (p === "/admin/api" && req.method === "GET") {
     const secrets = {};
     for (const n of Object.keys(SECRET_NAMES)) secrets[n] = mask(all.S[n]);
-    return json({ config: { system: all.cfg.system, history_turns: all.cfg.history_turns, max_tokens: all.cfg.max_tokens, llm: all.cfg.llm, tts: all.cfg.tts, asr: all.cfg.asr }, secrets });
+    return json({ config: { muse_mode: !!all.cfg.muse_mode, system: all.cfg.system, history_turns: all.cfg.history_turns, max_tokens: all.cfg.max_tokens, llm: all.cfg.llm, tts: all.cfg.tts, asr: all.cfg.asr }, secrets });
   }
   if (p === "/admin/api" && req.method === "POST") {
     if (!env.CFG) return json({ error: "KV not bound" }, 500);
@@ -286,6 +334,7 @@ async function admin(req, env, url, all) {
     if (body.config) {
       const c = body.config, keep = {};
       for (const k of ["system"]) if (typeof c[k] === "string") keep[k] = c[k];
+      if (typeof c.muse_mode === "boolean") keep.muse_mode = c.muse_mode;
       for (const k of ["history_turns", "max_tokens"]) if (Number.isFinite(+c[k])) keep[k] = +c[k];
       for (const k of ["llm", "tts", "asr"]) if (c[k] && typeof c[k] === "object") {
         keep[k] = {};
@@ -303,9 +352,24 @@ async function admin(req, env, url, all) {
     }
     return json({ ok: true });
   }
+  if (p === "/admin/voices" && req.method === "GET") {         // the full live voice list of the vendor (Azure)
+    if (!all.S.azure_key) return json({ error: "先在“密钥”里填 Azure Speech 密钥并保存" }, 400);
+    const region = url.searchParams.get("region") || all.cfg.tts.region || "eastasia";
+    const host = region.includes(".") ? region : `${region}.tts.speech.microsoft.com`;
+    const r = await fetch(`https://${host}/cognitiveservices/voices/list`, { headers: { "Ocp-Apim-Subscription-Key": all.S.azure_key } });
+    if (!r.ok) return json({ error: "Azure 返回 " + r.status + "（密钥或区域不对？）" }, 502);
+    const list = await r.json();
+    return json({ voices: list.map((v) => ({ n: v.ShortName, d: [v.LocalName, v.Locale, v.Gender].filter(Boolean).join(" · ") })) });
+  }
   if (p === "/admin/test" && req.method === "POST") {
-    const { service } = await req.json().catch(() => ({}));
+    const body = await req.json().catch(() => ({}));
+    const { service } = body;
     const t0 = Date.now();
+    if (body.config) {   // test with the values currently shown on the page (unsaved); keys still come from storage
+      const c = body.config, merged = { ...all.cfg };
+      for (const k of ["llm", "tts", "asr"]) if (c[k] && typeof c[k] === "object") merged[k] = { ...all.cfg[k], ...c[k] };
+      all = { ...all, cfg: merged };
+    }
     try {
       if (service === "llm") {
         const r = await llmStream(all.cfg, all.S, [{ role: "system", content: all.cfg.system + " 现在是北京时间" + nowZh() + "。" }, { role: "user", content: "用一两句话介绍一下你自己，再告诉我今天几号。" }]);
@@ -315,6 +379,10 @@ async function admin(req, env, url, all) {
       if (service === "tts") {
         const { audio, parts } = await synthAll(all.cfg, all.S, "你好，我是圆圆。这是一段语音合成的测试，如果你能听到我说话，说明这项服务已经配置好了。");
         return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-ms": String(Date.now() - t0), "x-parts": String(parts) } });
+      }
+      if (service === "asr" && all.cfg.asr.provider === "homebox") {
+        const text0 = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), "audio/wav");   // 1 s of silence
+        return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和令牌正常。这里发的是 1 秒静音，SenseVoice 对纯静音会乱猜一个字，属正常现象；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
       }
       if (service === "asr") {
         const { audio } = await synthAll(all.cfg, all.S, "今天天气怎么样，需要带伞吗");
@@ -334,7 +402,7 @@ export default {
     const all = await loadAll(env);
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
-      if (url.pathname === "/health") return json({ ok: true, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
+      if (url.pathname === "/health") return json({ ok: true, muse_mode: !!all.cfg.muse_mode, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
       if (req.method !== "POST") return text("method", 405);
       if (url.pathname === "/stt") return await stt(req, env, all);
       if (url.pathname === "/chat") return await chat(req, env, all, ctx);

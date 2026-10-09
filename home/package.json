@@ -1,0 +1,6 @@
+{
+  "name": "muse-home-gateway",
+  "private": true,
+  "description": "The Muse gateway Worker run locally (workerd via wrangler dev) on the home server, for the gadget on the LAN.",
+  "dependencies": { "wrangler": "^4" }
+}

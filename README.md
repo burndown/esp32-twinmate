@@ -27,13 +27,15 @@ flowchart LR
 
 ## 支持的服务商
 
-| | 阿里云百炼 | 火山引擎 | 其他 |
-|---|---|---|---|
-| 大模型 | 通义千问，支持联网搜索（`enable_search`） | 方舟豆包，联网搜索走 Responses API 的 `web_search` 工具 | DeepSeek；任意 OpenAI 兼容服务 |
-| 语音识别 | Qwen3-ASR-Flash | 豆包录音文件识别极速版 | |
-| 语音合成 | CosyVoice（WebSocket，输出 16 kHz MP3） | 豆包语音合成（HTTP v1） | |
+| | 阿里云百炼 | 火山引擎 | 微软 | 其他 |
+|---|---|---|---|---|
+| 大模型 | 通义千问，支持联网搜索（`enable_search`） | 方舟豆包，联网搜索走 Responses API 的 `web_search` 工具 | | DeepSeek；任意 OpenAI 兼容服务（含家里的 Ollama） |
+| 语音识别 | Qwen3-ASR-Flash | 豆包录音文件识别极速版 | | **本地服务器**（SenseVoice 经 sherpa-onnx，WAV 进、`{"text"}` 出） |
+| 语音合成 | CosyVoice（WebSocket，输出 16 kHz MP3） | 豆包语音合成（HTTP v1） | **Azure Speech**（Neural 音色，REST，16 kHz MP3） | |
 
-> **验证状态（如实说明）**：阿里云这一整套（识别、对话加联网搜索、合成，以及固件真机上的完整一轮）我在 Waveshare ESP32-S3-Touch-AMOLED-1.75C 上测过。**火山方舟、火山语音识别和合成、DeepSeek 是照着开源实现（[xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)、字节的 [agentkit-samples](https://github.com/bytedance/agentkit-samples)）写的，写完时还没有用真实密钥跑过**，设置页里每一项都有“测试”按钮，请先测再用。火山方舟的联网搜索接口尤其没验证。
+Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Azure 取回全部音色（几百个）供选择。
+
+> **验证状态（如实说明）**：阿里云整套、Azure 合成、本地 SenseVoice 识别，以及固件在 Waveshare ESP32-S3-Touch-AMOLED-1.75C 上的完整一轮（识别、回答、播报），我在真机上都用过。**火山方舟、火山语音识别和合成、DeepSeek 是照着开源实现写的，没有用真实密钥跑过**，设置页每一项都有"测试"按钮，请先测再用。火山方舟的联网搜索接口尤其没验证。固件里"识别回退"、"Muse 等太久改用网关的模型"、"Muse 连接中途断开后继续"这几条保险是按代码写的，没有在真机上人为制造故障验证。
 
 ## 部署网关
 
@@ -57,9 +59,37 @@ npx wrangler deploy
 - 火山语音的免费额度只有 2 路并发，网关对火山合成只并行 2 路；阿里云合成最多并行 6 路。
 - 网关每次把当前北京时间写进系统提示词，因为板子没有时钟、大模型自己也不知道今天几号。
 
+## 家里版网关（推荐）
+
+同一份 Worker 代码可以不经 Cloudflare，直接在家里的服务器上用 Cloudflare 开源的本地运行时（workerd，通过 `wrangler dev --local`）跑起来，只在局域网里可访问，见 `home/`：
+
+```bash
+mkdir -p ~/home-gateway/src && cd ~/home-gateway
+cp /path/to/repo/home/package.json /path/to/repo/home/wrangler.toml .
+cp /path/to/repo/worker/src/index.js /path/to/repo/worker/src/admin.html src/
+npm install
+printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .dev.vars
+# then install home/muse-home-gateway.service (fill in YOUR_USER and YOUR_LAN_IP) as a systemd unit
+```
+
+设置页在 `http://<内网地址>:8787/admin?k=<令牌>`，设置和密钥存在 `./state`（磁盘上的模拟 KV，明文）。为什么要有它：**云上的 Worker 对国内的服务商很慢**。实测（作者的网络，到 Cloudflare 的线路落在美国西海岸）同一句话合成云上 2.6 到 6.4 秒，家里版 0.7 到 1.3 秒；阿里云识别 2 到 4 秒对 0.5 秒；"回到 Muse"的 503 应答 0.4 秒加 TLS 握手对 15 毫秒。内网用 http，ESP32 还省掉每次请求的 TLS 握手。
+
+## "回到 Muse"开关
+
+设置页最上面的开关。打开后，网关对固件的第一次询问返回 503，固件就把识别出的文字交给 Muse 自己的助手回答；你选的大模型保留着，关掉开关就切回来。如果 Muse 在设定时间（`MUSE_BRAIN_GIVEUP_SECONDS`，默认 30 秒）内没有回一个字，固件会带 `muse_down: true` 再问一次，这时网关用你选的大模型回答，不让回合失败。限制：识别和播报仍走这里选的服务商，录音不会上传给 Muse。
+
+## 本地语音识别（可选）
+
+固件可以把录音直接发给家里的识别服务（最快，录音不出家门），失败再回退到网关。如果想让**云上**的网关也用家里的识别服务，需要一条回家的通路，`homebox/asr_gate.py` 是一个带令牌校验的小网关（只听本机端口），再用 Cloudflare Tunnel 把一个域名接到它。**注意**：作者的家里出口到 Cloudflare 的线路很远，这条路径实测每个请求约 3.5 秒，比内网直连慢得多，所以仅作备用。
+
 ## 固件
 
-补丁基于上游提交 `693cde9`，改动都在 `esp32/components/muse/`（识别、对话、合成三个客户端，Kconfig 选项，Unifont 16×16 中文字库，字幕和回复长度调整）。
+补丁基于上游提交 `693cde9`，改动都在 `esp32/components/muse/`：识别、对话、合成三个客户端，Kconfig 选项，Unifont 16×16 中文字库，字幕和回复长度调整，以及这些保险：
+
+- **识别回退**：`MUSE_STT_URL` 失败（或 5 秒没响应）就用 `MUSE_STT_FALLBACK_URL`。
+- **Muse 等待时间**可配（`MUSE_BRAIN_GIVEUP_SECONDS`）。
+- **Muse 连接中途断开**：还没收到字就改问网关；已经在回答就把收到的念完，而不是让整个回合失败。
+- **取语音缓冲 640 KB**。这个补丁早期版本里单段语音缓冲只有 256 KB（128 kbps 下 16 秒），超长的一句话会被无声截掉尾巴，下一段照常播放，听起来就是"丢了中间一句话"；现在够装下一段最长的语音，并且万一再被截断会在日志里报警。
 
 ```bash
 git clone https://github.com/facebookincubator/muse-gadget-sdk.git

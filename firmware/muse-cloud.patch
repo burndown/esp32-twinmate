@@ -11,10 +11,10 @@ index f3bec9f..e0516e9 100644
          "muse_lv_mem.c"
          "muse_link.c"
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 681e496..98fc6f1 100644
+index 681e496..2455a14 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -72,6 +72,34 @@ menu "Muse"
+@@ -72,6 +72,57 @@ menu "Muse"
              depends on IDF_TARGET_ESP32S3
      endchoice
  
@@ -36,6 +36,17 @@ index 681e496..98fc6f1 100644
 +            JSON {"text": "..."} it returns is sent to Muse as a chat message.
 +            Muse then never receives your voice, only the text.
 +
++    # Local addition: a second speech-to-text server, tried when MUSE_STT_URL fails.
++    config MUSE_STT_FALLBACK_URL
++        string "Fallback speech-to-text server URL (empty: no fallback)"
++        default ""
++        help
++            If the recording cannot be recognised at MUSE_STT_URL (server down,
++            unreachable, error), it is POSTed here instead, same format. A
++            typical setup: the home server on the LAN first, a cloud gateway
++            as the backup. With a fallback set, the first server gets a
++            5 second timeout so a dead server does not stall the turn.
++
 +    # Local addition: ask a text "brain" on the LAN instead of Muse.
 +    config MUSE_BRAIN_URL
 +        string "Brain server URL (empty: send the recognised text to Muse)"
@@ -46,11 +57,23 @@ index 681e496..98fc6f1 100644
 +            shown and spoken like a Muse reply. If the brain can't be reached
 +            the text goes to Muse instead.
 +
++    # Local addition: how long to wait for Muse before asking the brain instead.
++    config MUSE_BRAIN_GIVEUP_SECONDS
++        int "Seconds to wait for Muse's first reply before asking the brain instead"
++        range 10 240
++        default 30
++        depends on MUSE_BRAIN_URL != ""
++        help
++            With MUSE_BRAIN_URL set, the recognised text goes to Muse first (when the
++            brain steps aside). If Muse sends nothing back within this many seconds,
++            the request to Muse is cancelled and the brain is asked again as its
++            fallback. Muse itself often needs 10 to 30 s for the first words.
++
      config MUSE_ENABLED
          bool
          default y if !MUSE_BOARD_NONE
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 05fe181..c81abf7 100644
+index 05fe181..c1fc10e 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,6 +56,7 @@
@@ -105,7 +128,7 @@ index 05fe181..c81abf7 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1004,16 +1008,355 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1004,16 +1008,372 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -276,7 +299,7 @@ index 05fe181..c81abf7 100644
 + * Muse took the text but nothing came back within MUSE_GIVEUP_US: give up on it
 + * and ask the brain's fallback provider, once. Returns true if that was done.
 + */
-+#define MUSE_GIVEUP_US (30 * 1000000LL)
++#define MUSE_GIVEUP_US ((int64_t)CONFIG_MUSE_BRAIN_GIVEUP_SECONDS * 1000000LL)   /* see Kconfig; REPLY_TIMEOUT_US still applies when there is no brain */
 +
 +static bool brain_retry_after_silence(void)
 +{
@@ -308,6 +331,7 @@ index 05fe181..c81abf7 100644
 +enum stt_state_t : uint8_t { S_IDLE, S_BUSY, S_READY, S_FAILED };
 +
 +#define STT_TIMEOUT_MS 12000
++#define STT_PRIMARY_TIMEOUT_MS 5000   /* when a fallback server exists */
 +
 +EXT_RAM_BSS_ATTR static struct {
 +    volatile stt_state_t state;
@@ -317,14 +341,15 @@ index 05fe181..c81abf7 100644
 +    char text[1024];
 +} s_stt;
 +
-+static void stt_task(void *)
++/* One recognition request to url. Fills s_stt.text and returns true when the server answered {"text": ...}. */
++static bool stt_post(const char *url, int timeout_ms)
 +{
 +    bool ok = false;
 +    esp_http_client_config_t cfg = {};
-+    cfg.url = CONFIG_MUSE_STT_URL;
-+    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
++    cfg.url = url;
++    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* an https gateway needs it; harmless for plain http */
 +    cfg.method = HTTP_METHOD_POST;
-+    cfg.timeout_ms = STT_TIMEOUT_MS;
++    cfg.timeout_ms = timeout_ms;
 +    esp_http_client_handle_t h = esp_http_client_init(&cfg);
 +    s_stt.text[0] = '\0';
 +    if (h) {
@@ -355,6 +380,21 @@ index 05fe181..c81abf7 100644
 +            }
 +        }
 +        esp_http_client_cleanup(h);
++    }
++    return ok;
++}
++
++static void stt_task(void *)
++{
++    /* Primary server first (the home one, fast and on the LAN). If it can't be reached or fails and a fallback URL is
++     * set (the cloud gateway), the same recording goes there. The short primary timeout keeps a dead home server from
++     * stalling the turn. */
++    const bool has_fallback = CONFIG_MUSE_STT_FALLBACK_URL[0] != '\0';
++    bool ok = stt_post(CONFIG_MUSE_STT_URL, has_fallback ? STT_PRIMARY_TIMEOUT_MS : STT_TIMEOUT_MS);
++    ESP_LOGI(TAG, "stt primary: %s", ok ? "ok" : "failed");
++    if (!ok && has_fallback) {
++        ok = stt_post(CONFIG_MUSE_STT_FALLBACK_URL, STT_TIMEOUT_MS);
++        ESP_LOGI(TAG, "stt fallback: %s", ok ? "ok" : "failed");
 +    }
 +    ESP_LOGI(TAG, "stt: %s, %u chars", ok ? "ok" : "failed", (unsigned)strlen(s_stt.text));
 +    s_stt.state = ok ? S_READY : S_FAILED;
@@ -463,7 +503,7 @@ index 05fe181..c81abf7 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1412,8 +1755,8 @@ static void on_event(cJSON *line)
+@@ -1412,8 +1772,8 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -474,7 +514,7 @@ index 05fe181..c81abf7 100644
      }
      const char *event = cJSON_GetStringValue(cJSON_GetObjectItem(line, "event")) ?: "";
      cJSON *payload = cJSON_GetObjectItem(line, "payload");
-@@ -1492,37 +1835,233 @@ static void on_chat_ack(stream_t *s)
+@@ -1492,37 +1852,239 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -485,7 +525,10 @@ index 05fe181..c81abf7 100644
 + */
 +enum tts_fetch_t : uint8_t { F_IDLE, F_FETCHING, F_READY, F_FAILED };
 +
-+#define TTS_FETCH_MAX (256 * 1024)
++/* One piece of speech as MP3. A piece is at most TTS_TEXT_MAX bytes of text (about 160 characters, about 35 s of speech,
++ * 560 KB at 128 kbps). This was 256 KB (16 s): a longer piece was silently cut off and its last seconds were never
++ * spoken, while the next piece played normally - a sentence went missing in the middle of a reply. */
++#define TTS_FETCH_MAX (640 * 1024)
 +#define TTS_TEXT_MAX 480                   /* bytes of reply text sent for speech */
 +
 +EXT_RAM_BSS_ATTR static struct {
@@ -524,6 +567,9 @@ index 05fe181..c81abf7 100644
 +                if (n >= TTS_FETCH_MAX) {
 +                    break;
 +                }
++            }
++            if (n >= TTS_FETCH_MAX) {
++                ESP_LOGW(TAG, "tts fetch filled the %u byte buffer: the end of this piece is cut off", (unsigned)TTS_FETCH_MAX);
 +            }
 +            s_fetch.len = n;
 +            ok = n > 0;
@@ -725,7 +771,7 @@ index 05fe181..c81abf7 100644
          show_reply_start(m);
          return;
      }
-@@ -1582,6 +2121,39 @@ static void decode(void)
+@@ -1582,6 +2144,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -765,7 +811,7 @@ index 05fe181..c81abf7 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1656,6 +2228,9 @@ static void check_turn(void)
+@@ -1656,6 +2251,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -775,7 +821,36 @@ index 05fe181..c81abf7 100644
          /* A typed turn waits as long as the agent says it's working. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !(text && s_turn.agent_busy)) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1932,7 +2507,8 @@ static void hatch_task(void *arg)
+@@ -1864,9 +2462,27 @@ static bool poll_socket(void)
+ static void drop_connection(const char *why)
+ {
+     bool in_turn = s_turn.phase != P_IDLE;
++    /* A locally recognised turn that is only waiting for the answer does not have to die with the Muse connection. */
++    bool waiting = in_turn && s_turn.local_stt && s_turn.phase == P_WAIT_REPLY && !s_turn.brain;
+     disconnect(why);
+     s_auto_next_us = now_us() + s_auto_backoff_us;
+-    if (in_turn) {
++    if (waiting && s_turn.nmsgs > 0) {
++        /* The answer was already coming in: what arrived is the answer. Close the messages so it is spoken to the end. */
++        ESP_LOGW(TAG, "Muse connection lost (%s) mid-reply, speaking what arrived", why);
++        for (int i = 0; i < s_turn.nmsgs; i++) {
++            message_done(i, nullptr);
++        }
++    } else if (waiting && CONFIG_MUSE_BRAIN_URL[0] && !s_brain.muse_down) {
++        /* Nothing arrived yet: ask the brain's fallback provider, as when Muse stays silent. */
++        ESP_LOGW(TAG, "Muse connection lost (%s) before any reply, asking the brain's fallback provider", why);
++        s_turn.brain = true;          /* from here on Muse's events are ignored (see on_event) */
++        s_turn.chat_posted = true;
++        s_turn.chat_id = 0;           /* its stream died with the connection */
++        s_turn.chat_us = s_turn.last_event_us = now_us();
++        if (!brain_start(s_brain.text, true)) {
++            turn_fail("LOST CONNECTION TO MUSE");
++        }
++    } else if (in_turn) {
+         turn_fail("LOST CONNECTION TO MUSE");
+     }
+     muse_hatch_report(MUSE_HATCH_UNTESTED, "");
+@@ -1932,7 +2548,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -785,7 +860,7 @@ index 05fe181..c81abf7 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1940,11 +2516,25 @@ static void hatch_task(void *arg)
+@@ -1940,11 +2557,25 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -812,7 +887,7 @@ index 05fe181..c81abf7 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1968,7 +2558,7 @@ static void hatch_task(void *arg)
+@@ -1968,7 +2599,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {

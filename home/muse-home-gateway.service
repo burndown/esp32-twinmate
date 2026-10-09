@@ -1,0 +1,21 @@
+# Replace YOUR_USER and YOUR_LAN_IP (this machine's LAN address), then: sudo cp to /etc/systemd/system/ && sudo systemctl enable --now <name>
+[Unit]
+Description=Muse gateway (home edition) - the gateway Worker run locally with workerd, LAN only
+After=network-online.target
+
+[Service]
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/home-gateway
+Environment=WRANGLER_SEND_METRICS=false
+Environment=CI=1
+Environment=NO_UPDATE_NOTIFIER=1
+ExecStart=/home/YOUR_USER/home-gateway/node_modules/.bin/wrangler dev --local --ip YOUR_LAN_IP --port 8787 --persist-to /home/YOUR_USER/home-gateway/state --show-interactive-dev-session=false --log-level warn
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/YOUR_USER/home-gateway /home/YOUR_USER/.config /home/YOUR_USER/.cache /tmp
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target
