@@ -72,8 +72,28 @@ index 681e496..2455a14 100644
      config MUSE_ENABLED
          bool
          default y if !MUSE_BOARD_NONE
+diff --git a/esp32/components/muse/muse_chat.h b/esp32/components/muse/muse_chat.h
+index 170e040..fe4929e 100644
+--- a/esp32/components/muse/muse_chat.h
++++ b/esp32/components/muse/muse_chat.h
+@@ -133,6 +133,15 @@ size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames, int wait_ms
+ void muse_hatch_text_turn(char *text);
+ void muse_hatch_text_cancel(void);
+ 
++/*
++ * Local addition (display.show_text with speak): speaks `text` as the reply of
++ * a turn, with captions, through the TTS server. Voice task only; follow it
++ * with the usual reply loop. False if it could not be started.
++ */
++bool muse_hatch_say(const char *text);
++/* How far the speech has got in that text after `played` frames, 0..1. */
++float muse_hatch_say_progress(size_t played);
++
+ /*
+  * Prints one "@chat" line per call (more if `text` is long): the type, then the
+  * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 05fe181..c1fc10e 100644
+index 05fe181..c0e27db 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,6 +56,7 @@
@@ -102,6 +122,15 @@ index 05fe181..c1fc10e 100644
  #define SETTLE_US (3 * 1000000LL)          /* quiet period that ends a turn */
  #define BUSY_HOLD_US (20 * 1000000LL)      /* how long a busy agent keeps it open */
  #define TEXT_REPLY_TIMEOUT_US (5 * 60 * 1000000LL)   /* typed turns: agents can work a while */
+@@ -129,7 +130,7 @@ static const char *TAG = "muse_chat_session";
+ 
+ /* ---- Voice task <-> session task ---- */
+ 
+-enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE };
++enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE, CMD_SAY };
+ 
+ struct cmd_t {
+     cmd_type_t type;
 @@ -202,6 +203,7 @@ struct msg_t {
      tts_t tts;
      uint32_t pcm_start;      /* where its speech starts in the reply audio */
@@ -503,7 +532,43 @@ index 05fe181..c1fc10e 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1412,8 +1772,8 @@ static void on_event(cJSON *line)
+@@ -1215,6 +1575,35 @@ static void post_chat(const char *text)
+     send_chat(text, "text");
+ }
+ 
++static void append_text(msg_t &m, const char *text);
++static void show_reply_start(const msg_t &m);
++static void message_done(int i, const char *final_text);
++
++/*
++ * Local addition: display.show_text with speak. A turn whose reply is `text`
++ * itself, spoken by the same TTS path as a brain's reply. Nothing is asked of
++ * Muse or the brain, so no connection is needed.
++ */
++static void say_begin(uint32_t gen, const char *text)
++{
++    if (!turn_start(gen, false, false)) {
++        return;
++    }
++    ESP_LOGI(TAG, "say: %u bytes", (unsigned)strlen(text));
++    s_turn.local_stt = true;      /* the loop runs the speech without a Muse connection */
++    s_turn.brain = true;          /* a late Muse reply must not mix in */
++    s_turn.chat_posted = true;
++    s_turn.phase = P_WAIT_REPLY;
++    s_turn.last_event_us = s_turn.last_content_us = s_turn.chat_us = now_us();
++    msg_t &m = s_turn.msgs[0];
++    m = msg_t{};
++    strlcpy(m.id, "say", sizeof(m.id));
++    s_turn.nmsgs = 1;
++    append_text(m, text);
++    show_reply_start(m);
++    message_done(0, nullptr);
++}
++
+ /* A typed turn: the text goes straight to the chat. */
+ static void text_begin(const char *text)
+ {
+@@ -1412,8 +1801,8 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -514,7 +579,7 @@ index 05fe181..c1fc10e 100644
      }
      const char *event = cJSON_GetStringValue(cJSON_GetObjectItem(line, "event")) ?: "";
      cJSON *payload = cJSON_GetObjectItem(line, "payload");
-@@ -1492,37 +1852,239 @@ static void on_chat_ack(stream_t *s)
+@@ -1492,37 +1881,239 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -771,7 +836,7 @@ index 05fe181..c1fc10e 100644
          show_reply_start(m);
          return;
      }
-@@ -1582,6 +2144,39 @@ static void decode(void)
+@@ -1582,6 +2173,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -811,7 +876,7 @@ index 05fe181..c1fc10e 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1656,6 +2251,9 @@ static void check_turn(void)
+@@ -1656,6 +2280,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -821,7 +886,7 @@ index 05fe181..c1fc10e 100644
          /* A typed turn waits as long as the agent says it's working. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !(text && s_turn.agent_busy)) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1864,9 +2462,27 @@ static bool poll_socket(void)
+@@ -1864,9 +2491,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -850,7 +915,20 @@ index 05fe181..c1fc10e 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1932,7 +2548,8 @@ static void hatch_task(void *arg)
+@@ -1919,6 +2564,12 @@ static void handle(const cmd_t &cmd)
+             turn_fail("CANCELLED");
+         }
+         break;
++    case CMD_SAY:
++        if (cmd.gen == s_gen.load() && cmd.text) {
++            say_begin(cmd.gen, cmd.text);
++        }
++        free(cmd.text);
++        break;
+     case CMD_WAKE:   /* only ends hatch_task's resting wait */
+         break;
+     }
+@@ -1932,7 +2583,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -860,7 +938,7 @@ index 05fe181..c1fc10e 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1940,11 +2557,25 @@ static void hatch_task(void *arg)
+@@ -1940,11 +2592,25 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -887,7 +965,7 @@ index 05fe181..c1fc10e 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1968,7 +2599,7 @@ static void hatch_task(void *arg)
+@@ -1968,7 +2634,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -896,6 +974,48 @@ index 05fe181..c1fc10e 100644
          }
          if (!sent) {
              drop_connection("send failed");
+@@ -2115,6 +2781,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+     }
+ }
+ 
++/* How far into its text the speech has got after `played` frames: 0..1. For the say turn's one message. */
++extern "C" float muse_hatch_say_progress(size_t played)
++{
++    if (!s_turn.nmsgs || !s_turn.texts) {
++        return 0.0f;
++    }
++    const msg_t &m = s_turn.msgs[0];
++    size_t len = strnlen(s_turn.texts, TEXT_MAX);
++    if (m.tts < TTS_ACTIVE || !len || played < m.pcm_start) {
++        return 0.0f;
++    }
++    uint32_t frames = m.pcm_frames ? m.pcm_frames : (uint32_t)(len * MIC_RATE / SPEECH_CHARS_PER_S);
++    float f = frames ? (float)(played - m.pcm_start) / (float)frames : 0.0f;
++    return f > 1.0f ? 1.0f : f;
++}
++
++/* Speaks `text` as a reply (voice task only). False if it could not be queued. */
++extern "C" bool muse_hatch_say(const char *text)
++{
++    char *copy = text && text[0] ? strdup(text) : nullptr;
++    if (!s_cmds || !copy) {
++        free(copy);
++        return false;
++    }
++    uint32_t gen = ++s_gen;
++    xStreamBufferReset(s_in);
++    drain_out();
++    cmd_t cmd{ CMD_SAY, gen, copy };
++    if (xQueueSend(s_cmds, &cmd, pdMS_TO_TICKS(1000)) != pdTRUE) {
++        free(copy);
++        return false;
++    }
++    return true;
++}
++
+ extern "C" void muse_hatch_text_cancel(void)
+ {
+     post(CMD_TEXT_CANCEL, 0);
 diff --git a/esp32/components/muse/muse_font_cjk16.c b/esp32/components/muse/muse_font_cjk16.c
 new file mode 100644
 index 0000000..e0aa514
@@ -22241,10 +22361,29 @@ index 0000000..e0aa514
 +    .dsc = &font_dsc
 +};
 diff --git a/esp32/components/muse/muse_ui.c b/esp32/components/muse/muse_ui.c
-index 528320f..4e439dd 100644
+index 528320f..121a536 100644
 --- a/esp32/components/muse/muse_ui.c
 +++ b/esp32/components/muse/muse_ui.c
-@@ -369,6 +369,20 @@ static void invalidate_muse(void)
+@@ -124,6 +124,18 @@ static SemaphoreHandle_t s_image_mutex;
+ static uint16_t *s_image_buf;
+ static lv_area_t s_image_area;
+ static bool s_image_dirty;
++/* display.show_text: text scrolling over the face, until a tap, a talk or the menu. */
++#define NOTE_PX_PER_S 14.0f          /* reading pace when nothing is being spoken */
++#define NOTE_START_S 2.0f            /* the opening lines stay put this long */
++static lv_obj_t *s_note;             /* black backdrop, the whole screen */
++static lv_obj_t *s_note_box;         /* the window the text scrolls in */
++static lv_obj_t *s_note_lbl;
++static char *s_note_text;            /* MUSE_NOTE_MAX, in PSRAM */
++static bool s_note_new;              /* s_note_text is waiting to be shown */
++static bool s_note_shown;
++static bool s_note_manual;           /* the person is scrolling it themselves */
++static volatile float s_note_prog = -1.0f;   /* how far the speech has got, 0..1; <0 none */
++static float s_note_t0, s_note_y;
+ static bool s_ready;
+ 
+ static float s_level;
+@@ -369,6 +381,20 @@ static void invalidate_muse(void)
  
  static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color);
  
@@ -22265,7 +22404,7 @@ index 528320f..4e439dd 100644
  /* A microphone from primitives: LVGL's symbol font has none. */
  static lv_obj_t *make_mic(lv_obj_t *parent, int size)
  {
-@@ -665,7 +679,7 @@ static void build_answer(lv_obj_t *face, int ring_in)
+@@ -665,7 +691,7 @@ static void build_answer(lv_obj_t *face, int ring_in)
          int d = ring_in - spk_r - 4;   /* just inside the ring, even when swollen */
          spk_x = -(int)sqrtf((float)(d * d - spk_y * spk_y));
      }
@@ -22274,7 +22413,7 @@ index 528320f..4e439dd 100644
      int cw = lv_font_get_glyph_width(font, 'M', ' ');
      int pitch = lv_font_get_line_height(font) + CAPTION_LINE_SPACE;
  
-@@ -869,7 +883,7 @@ static void build_screen(void)
+@@ -869,7 +895,7 @@ static void build_screen(void)
       * these rows, so there's nowhere to put this without covering the face. */
      lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
  
@@ -22283,11 +22422,214 @@ index 528320f..4e439dd 100644
      if (s_small) {
          /* Two lines over the bottom of the face, on a dark band so they stay
           * legible. A tall screen has room to keep them above the mic icon. */
+@@ -929,6 +955,11 @@ static void on_cover_event(lv_event_t *e)
+ static void image_hide_locked(void)
+ {
+     xSemaphoreTake(s_image_mutex, portMAX_DELAY);
++    s_note_new = false;
++    if (s_note_shown) {
++        lv_obj_add_flag(s_note, LV_OBJ_FLAG_HIDDEN);
++        s_note_shown = false;
++    }
+     if (s_image_buf) {
+         lv_obj_add_flag(s_image, LV_OBJ_FLAG_HIDDEN);
+         lv_image_set_src(s_image, NULL);
+@@ -964,6 +995,61 @@ static void image_sync(void)
+     xSemaphoreGive(s_image_mutex);
+ }
+ 
++/* Each frame: shows text that display.show_text left. */
++static void note_sync(void)
++{
++    xSemaphoreTake(s_image_mutex, portMAX_DELAY);
++    if (s_note_new) {
++        s_note_new = false;
++        muse_menu_close();
++        lv_label_set_text(s_note_lbl, s_note_text);
++        lv_obj_scroll_to_y(s_note_box, 0, LV_ANIM_OFF);
++        lv_obj_remove_flag(s_note, LV_OBJ_FLAG_HIDDEN);
++        s_note_shown = true;
++        s_note_manual = false;
++        s_note_y = 0;
++        s_note_t0 = (float)esp_timer_get_time() / 1e6f;
++        muse_state_set_asleep(false);
++    }
++    xSemaphoreGive(s_image_mutex);
++}
++
++/* Scrolls the text a line at a time: with the speech if there is any, else at reading pace. */
++static void note_tick(float now)
++{
++    if (!s_note_shown || s_note_manual) {
++        return;
++    }
++    lv_obj_update_layout(s_note_box);
++    int32_t box_h = lv_obj_get_height(s_note_box);
++    int32_t lbl_h = lv_obj_get_height(s_note_lbl);
++    int32_t max = lbl_h - box_h;
++    if (max <= 0) {
++        return;
++    }
++    int32_t text_h = lbl_h - box_h / 2;   /* the label has box_h / 2 of padding below */
++    float prog = s_note_prog;
++    float want = prog >= 0 ? prog * text_h - box_h / 3 : (now - s_note_t0 - NOTE_START_S) * NOTE_PX_PER_S;
++    want = want < 0 ? 0 : want > max ? max : want;
++    s_note_y += (want - s_note_y) * 0.2f;
++    int32_t y = (int32_t)(s_note_y + 0.5f);
++    if (y != lv_obj_get_scroll_y(s_note_box)) {
++        lv_obj_scroll_to_y(s_note_box, y, LV_ANIM_OFF);
++    }
++}
++
++static void on_note_clicked(lv_event_t *e)
++{
++    (void)e;
++    image_hide_locked();
++}
++
++static void on_note_scroll_begin(lv_event_t *e)
++{
++    (void)e;
++    s_note_manual = true;   /* a finger on it: it stays where they put it */
++}
++
+ static void on_image_clicked(lv_event_t *e)
+ {
+     (void)e;
+@@ -1013,6 +1099,38 @@ static void build_overlays(void)
+     lv_obj_set_pos(s_image, 0, 0);
+     lv_obj_add_flag(s_image, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+     lv_obj_add_event_cb(s_image, on_image_clicked, LV_EVENT_CLICKED, NULL);
++
++    /* Text: a black page; on a round screen the text window sits inside the circle. */
++    s_note = lv_obj_create(scr);
++    lv_obj_remove_style_all(s_note);
++    lv_obj_set_size(s_note, s_w, s_h);
++    lv_obj_set_pos(s_note, 0, 0);
++    lv_obj_set_style_bg_color(s_note, lv_color_black(), 0);
++    lv_obj_set_style_bg_opa(s_note, LV_OPA_COVER, 0);
++    lv_obj_remove_flag(s_note, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_add_flag(s_note, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
++    lv_obj_add_event_cb(s_note, on_note_clicked, LV_EVENT_CLICKED, NULL);
++    {
++        int side = muse_board->round ? (s_w < s_h ? s_w : s_h) * 68 / 100 : s_w;
++        int box_h = muse_board->round ? side : s_h;
++        s_note_box = lv_obj_create(s_note);
++        lv_obj_remove_style_all(s_note_box);
++        lv_obj_set_size(s_note_box, side, box_h);
++        lv_obj_center(s_note_box);
++        lv_obj_set_scroll_dir(s_note_box, LV_DIR_VER);
++        lv_obj_set_scrollbar_mode(s_note_box, LV_SCROLLBAR_MODE_OFF);
++        lv_obj_add_event_cb(s_note_box, on_note_clicked, LV_EVENT_CLICKED, NULL);
++        lv_obj_add_event_cb(s_note_box, on_note_scroll_begin, LV_EVENT_SCROLL_BEGIN, NULL);
++        s_note_lbl = lv_label_create(s_note_box);
++        lv_obj_set_style_text_font(s_note_lbl, cap_font(), 0);
++        lv_obj_set_style_text_color(s_note_lbl, lv_color_hex(0xffffff), 0);
++        lv_obj_set_style_text_line_space(s_note_lbl, 6, 0);
++        lv_obj_set_style_text_align(s_note_lbl, LV_TEXT_ALIGN_LEFT, 0);
++        lv_obj_set_style_pad_bottom(s_note_lbl, box_h / 2, 0);   /* the last lines can reach the middle */
++        lv_label_set_long_mode(s_note_lbl, LV_LABEL_LONG_MODE_WRAP);
++        lv_obj_set_width(s_note_lbl, side);
++        lv_label_set_text(s_note_lbl, "");
++    }
+ #if CONFIG_MUSE_WATCHER_CAMERA
+     s_camera_hint = lv_btn_create(scr);
+     lv_obj_set_size(s_camera_hint, 244, 46);
+@@ -1440,6 +1558,7 @@ static void frame_tick(lv_timer_t *timer)
+     }
+     (void)timer;
+     image_sync();
++    note_sync();
+     float mode_t;
+     muse_mode_t mode = muse_state_mode(&mode_t);
+     float now = (float)esp_timer_get_time() / 1e6f;
+@@ -1459,8 +1578,9 @@ static void frame_tick(lv_timer_t *timer)
+         image_hide_locked();
+         return;   /* the menu covers the face */
+     }
+-    if (s_image_dsc.data) {
+-        return;   /* the image covers the face */
++    note_tick(now);
++    if (s_image_dsc.data || s_note_shown) {
++        return;   /* the image or text covers the face */
+     }
+     if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
+         /* Off screen, or sliding to or from settings: hold still so the
+@@ -1608,6 +1728,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
+     return true;
+ }
+ 
++bool muse_ui_note_show(const char *text)
++{
++    if (!s_ready || !s_note || !text) {
++        return false;
++    }
++    xSemaphoreTake(s_image_mutex, portMAX_DELAY);
++    if (!s_note_text) {
++        s_note_text = heap_caps_malloc(MUSE_NOTE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    }
++    if (!s_note_text) {
++        xSemaphoreGive(s_image_mutex);
++        return false;
++    }
++    strlcpy(s_note_text, text, MUSE_NOTE_MAX);
++    s_note_prog = -1.0f;
++    s_note_new = true;
++    xSemaphoreGive(s_image_mutex);
++    return true;
++}
++
++void muse_ui_note_progress(float frac)
++{
++    s_note_prog = frac > 1.0f ? 1.0f : frac;
++}
++
+ void muse_ui_image_hide(void)
+ {
+     if (!s_ready) {
+diff --git a/esp32/components/muse/muse_ui.h b/esp32/components/muse/muse_ui.h
+index 8a0a7c2..8d51921 100644
+--- a/esp32/components/muse/muse_ui.h
++++ b/esp32/components/muse/muse_ui.h
+@@ -47,6 +47,15 @@ void muse_ui_preview_brightness(int pct);
+ bool muse_ui_image_size(int *w, int *h);
+ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels);
+ void muse_ui_image_hide(void);
++/*
++ * display.show_text, from any task: a page of text (UTF-8, Chinese included)
++ * covers the face until a tap, a talk, the menu or muse_ui_image_hide(); a
++ * long text scrolls by itself, or under a finger.
++ */
++#define MUSE_NOTE_MAX 4000
++bool muse_ui_note_show(const char *text);
++/* How far the speech of that text has got, 0..1: the text scrolls with it. Negative: at reading pace. */
++void muse_ui_note_progress(float frac);
+ /* Watcher camera mode: shows an on-screen shutter hint over the live image. */
+ void muse_ui_camera_hint(bool visible);
+ 
 diff --git a/esp32/components/muse/muse_voice.c b/esp32/components/muse/muse_voice.c
-index d243fea..04b8e79 100644
+index d243fea..5363d84 100644
 --- a/esp32/components/muse/muse_voice.c
 +++ b/esp32/components/muse/muse_voice.c
-@@ -354,6 +354,7 @@ static bool hatch_reply(bool *delivered)
+@@ -36,6 +36,7 @@
+ #include "muse_mem.h"
+ #include "muse_settings.h"
+ #include "muse_state.h"
++#include "muse_ui.h"
+ #include "muse_wifi.h"
+ 
+ static const char *TAG = "muse_voice";
+@@ -71,6 +72,9 @@ static QueueHandle_t s_queue;
+ static volatile bool s_monitor;
+ static volatile float s_monitor_db = -100.0f;
+ static volatile bool s_chirp;
++static char *s_say_text;            /* MUSE_NOTE_MAX, in PSRAM: muse_voice_say() leaves it for the voice task */
++static bool s_saying;               /* hatch_reply() is playing a say turn: the text on screen follows it */
++static volatile bool s_say_pending;
+ static volatile bool s_loopback;
+ static volatile bool s_mp3test;
+ 
+@@ -354,6 +358,7 @@ static bool hatch_reply(bool *delivered)
      static char page[MUSE_CAPTION_MAX];
      bool done = false, speaking = false, replied = false;
      size_t played = 0;
@@ -22295,7 +22637,7 @@ index d243fea..04b8e79 100644
      int64_t t0 = esp_timer_get_time();
      *delivered = false;
      for (;;) {
-@@ -405,7 +406,8 @@ static bool hatch_reply(bool *delivered)
+@@ -405,8 +410,12 @@ static bool hatch_reply(bool *delivered)
                  ESP_LOGI(TAG, "reply audio after %.2fs", (esp_timer_get_time() - t0) / 1e6);
              }
              muse_state_set_level(muse_audio_level(buf, n));
@@ -22303,13 +22645,178 @@ index d243fea..04b8e79 100644
 +            for (size_t k = 0; k < n; k++) { int a = buf[k] < 0 ? -buf[k] : buf[k]; if (a > dbg_peak) dbg_peak = a; }
 +            if (muse_audio_write(buf, n) != ESP_OK) dbg_wfail++;
              played += n;
++            if (s_saying) {
++                muse_ui_note_progress(muse_hatch_say_progress(played));
++            }
          } else if (done) {
              break;
-@@ -420,6 +422,7 @@ static bool hatch_reply(bool *delivered)
+         } else if (speaking) {
+@@ -419,7 +428,11 @@ static bool hatch_reply(bool *delivered)
+             muse_state_set_caption("%s", page);
          }
      }
++    if (s_saying) {
++        muse_ui_note_progress(1.0f);
++    }
      muse_state_set_level(0);
 +    ESP_LOGI(TAG, "DIAG reply peak=%d write_fail=%d", dbg_peak, dbg_wfail);
      ESP_LOGI(TAG, "muse reply: %.2fs of audio, %.2fs total", (double)played / MUSE_AUDIO_RATE,
               (esp_timer_get_time() - t0) / 1e6);
      if (!played) {
+@@ -791,7 +804,7 @@ static void voice_task(void *arg)
+             muse_input_event_t ev;
+             bool asleep = muse_state_asleep();
+             bool battery = muse_state_on_battery();
+-            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback;
++            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback && !s_say_pending;
+ #if HOLD_NOTES
+             /* A press goes first: send_held() leaves it queued and returns
+              * without backing off, so retrying before it's read would spin. */
+@@ -838,6 +851,24 @@ static void voice_task(void *arg)
+                 muse_audio_loopback_test(muse_settings_volume());
+                 pre_reset();
+             }
++#if CONFIG_MUSE_HATCH
++            if (s_say_pending) {
++                s_say_pending = false;
++                muse_state_set_asleep(false);
++                muse_wifi_power(MUSE_WIFI_FULL);
++                if (muse_hatch_say(s_say_text)) {
++                    bool delivered;
++                    s_saying = true;
++                    pending_down = hatch_reply(&delivered);   /* a press during it starts the next turn */
++                    s_saying = false;
++                    pre_reset();
++                    if (!pending_down) {
++                        go_idle("");
++                    }
++                }
++                continue;
++            }
++#endif
+             /* The 20 ms read paces this loop. */
+             idle_capture();
+             if (xQueueReceive(s_queue, &ev, 0) != pdTRUE) {
+@@ -910,6 +941,23 @@ float muse_voice_monitor_db(void)
+     return s_monitor_db;
+ }
+ 
++bool muse_voice_say(const char *text)
++{
++    if (!text || !text[0] || s_say_pending) {
++        return false;
++    }
++    if (!s_say_text) {
++        s_say_text = heap_caps_malloc(MUSE_NOTE_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    }
++    if (!s_say_text) {
++        return false;
++    }
++    strlcpy(s_say_text, text, MUSE_NOTE_MAX);
++    s_say_pending = true;
++    muse_state_nudge();
++    return true;
++}
++
+ void muse_voice_request_chirp(void)
+ {
+     s_chirp = true;
+diff --git a/esp32/components/muse/muse_voice.h b/esp32/components/muse/muse_voice.h
+index 7a3ae28..74cf59a 100644
+--- a/esp32/components/muse/muse_voice.h
++++ b/esp32/components/muse/muse_voice.h
+@@ -35,6 +35,9 @@ void muse_voice_set_monitor(bool on);
+ /* Smoothed mic level in dBFS (fast attack, slow release). */
+ float muse_voice_monitor_db(void);
+ 
++/* display.show_text with speak: says `text` as a reply, when the voice task is idle. */
++bool muse_voice_say(const char *text);
++
+ /* Plays a short chirp at the current volume (when idle). */
+ void muse_voice_request_chirp(void);
+ 
+diff --git a/esp32/main/app.c b/esp32/main/app.c
+index 3f80ee0..459b540 100644
+--- a/esp32/main/app.c
++++ b/esp32/main/app.c
+@@ -73,6 +73,8 @@
+ #endif
+ #if CONFIG_MUSE_ENABLED
+ #include "muse_glue.h"
++#include "muse_ui.h"
++#include "muse_voice.h"
+ // Muse joins Wi-Fi from its own settings, before or without pairing.
+ #define WIFI_WITHOUT_PAIRING 1
+ #else
+@@ -1858,7 +1860,29 @@ static cJSON *on_ws_command(
+         cJSON_AddBoolToObject(async, "_async", true);
+         return async;
+     }
++#if CONFIG_HOMEHUB_LED_BACKEND_MUSE && !CONFIG_HOMEHUB_TM1637
++    if (strcmp(command, "display.show_text") == 0) {
++        cJSON *t = params ? cJSON_GetObjectItem(params, "text") : NULL;
++        if (!cJSON_IsString(t) || !t->valuestring || !t->valuestring[0]) {
++            return command_error("missing_param", "text is required");
++        }
++        if (!muse_ui_note_show(t->valuestring)) {
++            return command_error("not_ready", "the screen is not ready");
++        }
++        cJSON *speak = params ? cJSON_GetObjectItem(params, "speak") : NULL;
++        bool speaking = cJSON_IsTrue(speak) && muse_voice_say(t->valuestring);
++        cJSON *result = cJSON_CreateObject();
++        cJSON_AddBoolToObject(result, "ok", true);
++        cJSON *payload = cJSON_AddObjectToObject(result, "payload");
++        cJSON_AddNumberToObject(payload, "bytes", (double)strlen(t->valuestring));
++        cJSON_AddBoolToObject(payload, "speaking", speaking);
++        return result;
++    }
++#endif
+     if (strcmp(command, "display.show_animation") == 0) {
++#if CONFIG_MUSE_ENABLED
++        muse_ui_image_hide();   // also clears display.show_text
++#endif
+         led_status_show_animation();
+         cJSON *result = cJSON_CreateObject();
+         cJSON_AddBoolToObject(result, "ok", true);
+diff --git a/esp32/main/noise_control.cpp b/esp32/main/noise_control.cpp
+index a234208..5034800 100644
+--- a/esp32/main/noise_control.cpp
++++ b/esp32/main/noise_control.cpp
+@@ -1344,6 +1344,37 @@ static char *build_register_json(void) {
+     }
+ #endif
+ 
++#if CONFIG_HOMEHUB_DISPLAY_COMMANDS && CONFIG_HOMEHUB_LED_BACKEND_MUSE && !CONFIG_HOMEHUB_TM1637
++    {
++        // Local addition: a page of text on the round Muse screen.
++        cJSON *text_required = cJSON_CreateObject();
++        cJSON_AddItemToObject(
++            text_required, "text",
++            string_param("The text to show, UTF-8, Chinese included. Up to about "
++                         "4000 bytes (roughly 1300 Chinese characters). Newlines "
++                         "start a new line."));
++        cJSON *text_optional = cJSON_CreateObject();
++        cJSON *speak_param = cJSON_CreateObject();
++        cJSON_AddStringToObject(speak_param, "type", "boolean");
++        cJSON_AddStringToObject(speak_param, "description",
++                                "true to read the text aloud as well (the gadget's own "
++                                "voice, with the speaker on); default false. Ignored if "
++                                "the gadget is busy talking.");
++        cJSON_AddItemToObject(text_optional, "speak", speak_param);
++        add_command(commands, "display.show_text",
++                    "Show text on the round screen, white on black, like a "
++                    "teleprompter: long text scrolls up by itself a line at a "
++                    "time (in step with the voice when speak is true, else at "
++                    "reading pace), and the person can also drag it. It covers "
++                    "the avatar until the person taps the screen, "
++                    "presses the talk button or calls display.show_animation. "
++                    "Use this to show words, numbers or a short note; use "
++                    "display.draw_url for a picture. Replies when the text is "
++                    "queued for the screen. It is silent unless speak is true.",
++                    text_required, text_optional);
++    }
++#endif
++
+ #if CONFIG_HOMEHUB_VOICE
+     cJSON *volume_optional = cJSON_CreateObject();
+     cJSON *volume_param = cJSON_CreateObject();
