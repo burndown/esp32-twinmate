@@ -109,11 +109,17 @@ function nowZh() {
   return new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "long", day: "numeric", weekday: "long", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+// The system prompt with today's date and the rules that stop a model from answering "this year" questions from memory.
+function sysPrompt(cfg) {
+  return cfg.system + " 现在是北京时间" + nowZh() + "。凡是涉及现在、今年、最新、近期的问题，先联网搜索，以搜索结果和今天的日期为准，不要凭记忆回答，也不要把今年说成去年。回答里不要出现链接、星号、井号等格式符号。";
+}
+
 function llmTarget(cfg, S) {
   const L = cfg.llm;
   switch (L.provider) {
     case "ark": return { base: ARK, key: S.ark_key, name: "ark" };
     case "deepseek": return { base: "https://api.deepseek.com", key: S.deepseek_key, name: "deepseek" };
+    case "responses": return { base: (L.base_url || "").replace(/\/+$/, ""), key: S.custom_key, name: "responses" };   // OpenAI Responses API (cliproxy, OpenAI)
     case "custom": return { base: (L.base_url || "").replace(/\/+$/, ""), key: S.custom_key, name: "custom" };
     default: return { base: DASHSCOPE + "/compatible-mode/v1", key: S.dashscope_key, name: "dashscope" };
   }
@@ -129,12 +135,14 @@ async function llmStream(cfg, S, messages) {
   const headers = { Authorization: "Bearer " + T.key, "content-type": "application/json" };
 
   let up = null, mode = "chat";
-  if (T.name === "ark" && L.search) {                         // Responses API with the web_search tool
+  if ((T.name === "ark" || T.name === "responses") && L.search) {   // Responses API with the web_search tool
     const sys = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n");
     up = await fetch(T.base + "/responses", { method: "POST", headers, body: JSON.stringify({
       model: L.model, stream: true, instructions: sys, tools: [{ type: "web_search" }],
       input: messages.filter((m) => m.role !== "system").map((m) => ({ role: m.role, content: m.content })), ...extra }) });
-    if (up.ok && up.body) mode = "responses"; else { console.log("ark responses", up.status); up = null; }
+    if (up.ok && up.body) mode = "responses";
+    else if (T.name === "responses") throw new Error("llm http " + up.status + " " + (await up.text().catch(() => "")).slice(0, 160));
+    else { console.log("ark responses", up.status); up = null; }
   }
   if (!up) {
     const body = { model: L.model, stream: true, max_tokens: cfg.max_tokens, messages, ...extra };
@@ -158,7 +166,10 @@ async function llmStream(cfg, S, messages) {
         try {
           const j = JSON.parse(p);
           const t = mode === "responses" ? (j.type === "response.output_text.delta" ? j.delta : "") : j.choices?.[0]?.delta?.content;
-          if (t) { reply += t; ctl.enqueue(enc.encode(t)); }
+          if (t) {
+            const clean = t.replace(/[*#`]+/g, "");   // markdown marks would be shown in the captions and may be spoken
+            if (clean) { reply += clean; ctl.enqueue(enc.encode(clean)); }
+          }
         } catch (e) { /* partial line */ }
       }
     },
@@ -178,7 +189,7 @@ async function chat(req, env, all, ctx) {
   let hist = [];
   try { hist = (env.CFG && (await env.CFG.get(hKey, "json"))) || []; } catch (e) { hist = []; }
   hist = hist.slice(-cfg.history_turns * 2);
-  const messages = [{ role: "system", content: cfg.system + " 现在是北京时间" + nowZh() + "。" }, ...hist, { role: "user", content: userText }];
+  const messages = [{ role: "system", content: sysPrompt(cfg) }, ...hist, { role: "user", content: userText }];
   let r;
   try { r = await llmStream(cfg, S, messages); } catch (e) { return json({ error: String(e).slice(0, 200) }, 502); }
   ctx.waitUntil(r.reply.then((reply) => {
@@ -372,7 +383,7 @@ async function admin(req, env, url, all) {
     }
     try {
       if (service === "llm") {
-        const r = await llmStream(all.cfg, all.S, [{ role: "system", content: all.cfg.system + " 现在是北京时间" + nowZh() + "。" }, { role: "user", content: "用一两句话介绍一下你自己，再告诉我今天几号。" }]);
+        const r = await llmStream(all.cfg, all.S, [{ role: "system", content: sysPrompt(all.cfg) }, { role: "user", content: "用一两句话介绍一下你自己，再告诉我今天几号。" }]);
         const reply = await new Response(r.stream).text();
         return json({ ok: true, ms: Date.now() - t0, text: reply.slice(0, 400) });
       }

@@ -50,10 +50,11 @@ button:disabled{opacity:.5}
   <option value="dashscope">阿里云百炼（通义千问）</option>
   <option value="ark">火山方舟（豆包）</option>
   <option value="deepseek">DeepSeek</option>
+  <option value="responses">Responses 接口（cliproxy / OpenAI，支持联网搜索）</option>
   <option value="custom">自定义（OpenAI 兼容）</option></select></div>
  <div><label>模型</label><input type="text" id="llm_model" list="llm_models"><datalist id="llm_models"></datalist></div>
 </div>
-<div class="chk"><input type="checkbox" id="llm_search"><label for="llm_search" style="margin:0;color:inherit">联网搜索（仅阿里云百炼、火山方舟支持）</label></div>
+<div class="chk"><input type="checkbox" id="llm_search"><label for="llm_search" style="margin:0;color:inherit">联网搜索（阿里云百炼、火山方舟、Responses 接口支持）</label></div>
 <div id="custom_url" class="hide"><label>接口地址（到 /v1 为止）</label><input type="text" id="llm_base_url" placeholder="https://api.example.com/v1"></div>
 <label>额外参数（可选，JSON，会并进请求）</label><input type="text" id="llm_extra" placeholder='{"thinking":{"type":"disabled"}}'>
 <p style="margin:12px 0 0"><button onclick="test('llm')">测试大模型</button></p><div class="res" id="res_llm"></div>
@@ -111,6 +112,7 @@ const MODELS = {
   dashscope: ["qwen-plus", "qwen-flash", "qwen3-max", "qwen-turbo"],
   ark: ["doubao-seed-2-0-lite-260215", "doubao-seed-1-6-250615", "doubao-seed-1-6-flash-250828"],
   deepseek: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"],
+  responses: ["gpt-5.6-sol", "gpt-6-sol"],
   custom: []
 };
 const TTS_MODELS = ["cosyvoice-v2", "cosyvoice-v3-flash", "cosyvoice-v3-plus"];
@@ -135,7 +137,7 @@ function fill(list, id, items){ $(id).innerHTML = items.map(x => "<option value=
 function refresh(){
   const p = $("llm_provider").value;
   fill(0, "llm_models", MODELS[p] || []);
-  $("custom_url").classList.toggle("hide", p !== "custom");
+  $("custom_url").classList.toggle("hide", p !== "custom" && p !== "responses");
   const tp = $("tts_provider").value;
   fill(0, "tts_voices", VOICES[tp]);
   fill(0, "tts_models", tp === "cosyvoice" ? TTS_MODELS : []);

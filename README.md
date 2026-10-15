@@ -33,6 +33,15 @@ flowchart LR
 | 语音识别 | Qwen3-ASR-Flash | 豆包录音文件识别极速版 | | **本地服务器**（SenseVoice 经 sherpa-onnx，WAV 进、`{"text"}` 出） |
 | 语音合成 | CosyVoice（WebSocket，输出 16 kHz MP3） | 豆包语音合成（HTTP v1） | **Azure Speech**（Neural 音色，REST，16 kHz MP3） | |
 
+**用 CLIProxyAPI 接入 ChatGPT / Gemini 订阅（仅限家里网关，我自己实测过一次）**：[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 在内网提供 OpenAI 兼容接口，云端 Worker 够不到它，所以只能配在家里网关上。两种用法：
+
+- **Gemini + 谷歌搜索（推荐，约 3 秒）**：服务商选"自定义"，接口地址填 `http://<你的内网地址>:8317/v1`，模型填 `gemini-3-flash`，"额外参数"填 `{"tools":[{"google_search":{}}]}`，不勾网关自己的联网搜索。
+- **GPT + 搜索（约 17 秒才出第一个字，因为先搜索后写）**：服务商选"Responses 接口"，模型填 `gpt-5.6-sol` 一类，勾选联网搜索，额外参数可填 `{"reasoning":{"effort":"low"}}`。Gemini 走 Responses 接口时**不会搜索**，要用上一种。
+
+这是把订阅账号经非官方代理当 API 用，可能违反服务条款，额度和封号风险自行评估。
+
+网关会在系统提示里给模型当天日期，并要求涉及"今年、最新"的问题先搜索；回复里的 `*`、`#`、反引号会被去掉，避免字幕和语音里出现格式符号。
+
 Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Azure 取回全部音色（几百个）供选择。
 
 > **验证状态（如实说明）**：阿里云整套、Azure 合成、本地 SenseVoice 识别，以及固件在 Waveshare ESP32-S3-Touch-AMOLED-1.75C 上的完整一轮（识别、回答、播报），我在真机上都用过。**火山方舟、火山语音识别和合成、DeepSeek 是照着开源实现写的，没有用真实密钥跑过**，设置页每一项都有"测试"按钮，请先测再用。火山方舟的联网搜索接口尤其没验证。固件里"识别回退"、"Muse 等太久改用网关的模型"、"Muse 连接中途断开后继续"这几条保险是按代码写的，没有在真机上人为制造故障验证。
