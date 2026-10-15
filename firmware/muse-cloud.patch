@@ -11,10 +11,10 @@ index f3bec9f..e0516e9 100644
          "muse_lv_mem.c"
          "muse_link.c"
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 681e496..2455a14 100644
+index 681e496..a24583d 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -72,6 +72,57 @@ menu "Muse"
+@@ -72,6 +72,80 @@ menu "Muse"
              depends on IDF_TARGET_ESP32S3
      endchoice
  
@@ -35,6 +35,29 @@ index 681e496..2455a14 100644
 +            The recording is POSTed here as raw 16 kHz 16-bit mono PCM and the
 +            JSON {"text": "..."} it returns is sent to Muse as a chat message.
 +            Muse then never receives your voice, only the text.
++
++    # Local addition: public backups for the brain and the speech server, for when the home LAN is out of reach.
++    config MUSE_HOME_SSID
++        string "Home Wi-Fi network name (empty: probe the LAN address instead)"
++        default ""
++        help
++            With a name set, the brain, speech and recognition servers use their
++            primary (LAN) address only while joined to this network, and the
++            fallback (public) address on any other network, whether or not
++            Muse is paired. Empty: a quick TCP connect to the primary decides.
++
++    config MUSE_BRAIN_FALLBACK_URL
++        string "Fallback brain URL (empty: none)"
++        default ""
++        help
++            Tried when MUSE_BRAIN_URL does not answer a quick TCP connect (away from
++            home) or its request fails before any text arrives.
++
++    config MUSE_TTS_FALLBACK_URL
++        string "Fallback text-to-speech URL (empty: none)"
++        default ""
++        help
++            Same, for MUSE_TTS_URL.
 +
 +    # Local addition: a second speech-to-text server, tried when MUSE_STT_URL fails.
 +    config MUSE_STT_FALLBACK_URL
@@ -194,18 +217,27 @@ index 170e040..2f237a3 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 05fe181..cb757f2 100644
+index 05fe181..a9a306d 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
-@@ -56,6 +56,7 @@
+@@ -56,12 +56,16 @@
  #include "esp_random.h"
  #include "esp_timer.h"
  #include "esp_tls.h"
++#include "esp_wifi.h"
 +#include "esp_http_client.h"
  #include "freertos/FreeRTOS.h"
  #include "freertos/idf_additions.h"
  #include "freertos/queue.h"
-@@ -69,6 +70,7 @@ extern "C" {
+ #include "freertos/stream_buffer.h"
+ #include "freertos/task.h"
++#include "lwip/netdb.h"
+ #include "lwip/sockets.h"
++#include <fcntl.h>
+ 
+ extern "C" {
+ #include "cJSON.h"
+@@ -69,6 +73,7 @@ extern "C" {
  #include "muse_account_api.h"
  #include "muse_link.h"
  #include "muse_settings.h"
@@ -213,7 +245,7 @@ index 05fe181..cb757f2 100644
  #include "muse_wifi.h"
  }
  #include "muse_chat_priv.h"
-@@ -98,7 +100,7 @@ static const char *TAG = "muse_chat_session";
+@@ -98,7 +103,7 @@ static const char *TAG = "muse_chat_session";
  #define IN_BYTES (MIC_RATE * 2 * 8)        /* 8 s of mic backlog while connecting */
  #define OUT_BYTES (MIC_RATE * 2 * 2)       /* 2 s of decoded reply */
  #define EV_TEXT 72
@@ -222,7 +254,7 @@ index 05fe181..cb757f2 100644
  #define SPEECH_CHARS_PER_S 14              /* until the speech's length is known */
  #define TEXT_CHARS_PER_S 16                /* speaker off: reading pace, a little over speech */
  #define TEXT_HOLD_S 2                      /* speaker off: how long a message's last lines stay up */
-@@ -110,7 +112,7 @@ static const char *TAG = "muse_chat_session";
+@@ -110,7 +115,7 @@ static const char *TAG = "muse_chat_session";
  #define AUTO_RETRY_MAX_US (120 * 1000000LL)
  #define FINAL_TIMEOUT_US (15 * 1000000LL)  /* release -> final transcript */
  #define REPLY_TIMEOUT_US (60 * 1000000LL)  /* chat posted -> first assistant message */
@@ -231,7 +263,7 @@ index 05fe181..cb757f2 100644
  #define SETTLE_US (3 * 1000000LL)          /* quiet period that ends a turn */
  #define BUSY_HOLD_US (20 * 1000000LL)      /* how long a busy agent keeps it open */
  #define TEXT_REPLY_TIMEOUT_US (5 * 60 * 1000000LL)   /* typed turns: agents can work a while */
-@@ -129,7 +131,7 @@ static const char *TAG = "muse_chat_session";
+@@ -129,7 +134,7 @@ static const char *TAG = "muse_chat_session";
  
  /* ---- Voice task <-> session task ---- */
  
@@ -240,7 +272,7 @@ index 05fe181..cb757f2 100644
  
  struct cmd_t {
      cmd_type_t type;
-@@ -202,6 +204,7 @@ struct msg_t {
+@@ -202,6 +207,7 @@ struct msg_t {
      tts_t tts;
      uint32_t pcm_start;      /* where its speech starts in the reply audio */
      uint32_t pcm_frames;     /* how long it is; 0 until the MP3 has all arrived */
@@ -248,7 +280,7 @@ index 05fe181..cb757f2 100644
  };
  
  struct resampler_t {
-@@ -214,6 +217,8 @@ struct turn_t {
+@@ -214,6 +220,8 @@ struct turn_t {
      phase_t phase;
      uint32_t gen;
      bool text;               /* typed at the console: the reply goes there, unspoken */
@@ -257,7 +289,7 @@ index 05fe181..cb757f2 100644
      bool end_requested, end_sent, chat_posted, acked;
      int64_t dict_id, chat_id;
      int64_t start_us, end_sent_us, chat_us, last_event_us, last_content_us;
-@@ -949,8 +954,13 @@ static void turn_reset_streams(void)
+@@ -949,8 +957,13 @@ static void turn_reset_streams(void)
      }
  }
  
@@ -271,7 +303,7 @@ index 05fe181..cb757f2 100644
      turn_reset_streams();
      s_turn.phase = P_IDLE;
      s_turn.dict_id = s_turn.chat_id = 0;
-@@ -981,7 +991,7 @@ static void turn_done(bool complete)
+@@ -981,7 +994,7 @@ static void turn_done(bool complete)
  }
  
  /* Ends any turn in progress and starts a fresh one. False if Hatch can't be reached. */
@@ -280,7 +312,7 @@ index 05fe181..cb757f2 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1004,16 +1014,372 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1004,16 +1017,481 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -304,6 +336,105 @@ index 05fe181..cb757f2 100644
 + */
 +static void post_chat(const char *text);
 +
++/*
++ * Local addition: a home server on the LAN first, a public address as the backup. Away from home the LAN address
++ * does not answer; a quick TCP connect finds that out in 1.5 s instead of a long request timeout, and the result
++ * is remembered for a while so each turn does not pay it again. A request that fails on the primary anyway is
++ * tried once on the fallback (see the three callers).
++ */
++enum { SLOT_STT, SLOT_BRAIN, SLOT_TTS, SLOT_COUNT };
++#define PRIMARY_PROBE_MS 1500
++#define PRIMARY_DOWN_US (90 * 1000000LL)
++static int64_t s_primary_down_until[SLOT_COUNT];
++
++static bool host_reachable(const char *url, int timeout_ms)
++{
++    const char *p = strstr(url, "://");
++    p = p ? p + 3 : url;
++    int port = !strncmp(url, "https", 5) ? 443 : 80;
++    char host[64];
++    size_t n = 0;
++    while (p[n] && p[n] != ':' && p[n] != '/' && p[n] != '?' && n < sizeof(host) - 1) {
++        host[n] = p[n];
++        n++;
++    }
++    host[n] = '\0';
++    if (p[n] == ':') {
++        port = atoi(p + n + 1);
++    }
++    char ps[8];
++    snprintf(ps, sizeof(ps), "%d", port);
++    struct addrinfo hints = {};
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_STREAM;
++    struct addrinfo *res = nullptr;
++    if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) {
++        return false;
++    }
++    bool ok = false;
++    int fd = socket(res->ai_family, res->ai_socktype, 0);
++    if (fd >= 0) {
++        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
++        int r = connect(fd, res->ai_addr, res->ai_addrlen);
++        if (r == 0) {
++            ok = true;
++        } else if (errno == EINPROGRESS) {
++            fd_set w;
++            FD_ZERO(&w);
++            FD_SET(fd, &w);
++            struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
++            if (select(fd + 1, nullptr, &w, nullptr, &tv) > 0) {
++                int err = 0;
++                socklen_t len = sizeof(err);
++                getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
++                ok = err == 0;
++            }
++        }
++        close(fd);
++    }
++    freeaddrinfo(res);
++    return ok;
++}
++
++/* The Wi-Fi network the gadget is joined to, "" when it is not joined. */
++static void current_ssid(char *out, size_t cap)
++{
++    out[0] = '\0';
++    wifi_ap_record_t ap;
++    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
++        strlcpy(out, (const char *)ap.ssid, cap);
++    }
++}
++
++/*
++ * 0: try the primary (home server) first; 1: go straight to the fallback (public address).
++ * With CONFIG_MUSE_HOME_SSID set, the joined network decides, whether or not Muse is paired or reachable: the home
++ * network means the LAN address, any other network means the public one. Without it, a quick connect probe decides.
++ */
++static int pick_first(int slot, const char *primary, const char *fallback)
++{
++    if (!fallback[0]) {
++        return 0;
++    }
++    if (CONFIG_MUSE_HOME_SSID[0]) {
++        char ssid[33];
++        current_ssid(ssid, sizeof(ssid));
++        bool home = strcmp(ssid, CONFIG_MUSE_HOME_SSID) == 0;
++        ESP_LOGI(TAG, "server %d: network \"%s\" is %s", slot, ssid, home ? "home: LAN address" : "not home: public address");
++        return home ? 0 : 1;
++    }
++    int64_t now = now_us();
++    if (now < s_primary_down_until[slot]) {
++        return 1;
++    }
++    if (host_reachable(primary, PRIMARY_PROBE_MS)) {
++        return 0;
++    }
++    s_primary_down_until[slot] = now + PRIMARY_DOWN_US;
++    ESP_LOGI(TAG, "primary server %d is not answering; using the fallback for a while", slot);
++    return 1;
++}
++
 +enum brain_state_t : uint8_t { B_IDLE, B_RUN, B_DONE, B_FAILED };
 +
 +EXT_RAM_BSS_ATTR static struct {
@@ -325,12 +456,18 @@ index 05fe181..cb757f2 100644
 +    }
 +    char *json = cJSON_PrintUnformatted(body);
 +    cJSON_Delete(body);
++    const char *urls[2] = { CONFIG_MUSE_BRAIN_URL, nullptr };
++    switch (pick_first(SLOT_BRAIN, CONFIG_MUSE_BRAIN_URL, CONFIG_MUSE_BRAIN_FALLBACK_URL)) {
++    case 1: urls[0] = CONFIG_MUSE_BRAIN_FALLBACK_URL; break;
++    default: if (CONFIG_MUSE_BRAIN_FALLBACK_URL[0]) urls[1] = CONFIG_MUSE_BRAIN_FALLBACK_URL;
++    }
++    for (int u = 0; u < 2 && urls[u] && !got && json; u++) {
 +    esp_http_client_config_t cfg = {};
-+    cfg.url = CONFIG_MUSE_BRAIN_URL;
++    cfg.url = urls[u];
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
 +    cfg.timeout_ms = 30000;
-+    esp_http_client_handle_t h = json ? esp_http_client_init(&cfg) : nullptr;
++    esp_http_client_handle_t h = esp_http_client_init(&cfg);
 +    if (h) {
 +        esp_http_client_set_header(h, "Content-Type", "application/json");
 +        esp_http_client_set_header(h, "X-Device", "muse-gadget");
@@ -348,6 +485,7 @@ index 05fe181..cb757f2 100644
 +            }
 +        }
 +        esp_http_client_cleanup(h);
++    }
 +    }
 +    free(json);
 +    ESP_LOGI(TAG, "brain: %s%s", ok ? "ok" : "failed", got ? "" : " (no text)");
@@ -542,8 +680,11 @@ index 05fe181..cb757f2 100644
 +     * set (the cloud gateway), the same recording goes there. The short primary timeout keeps a dead home server from
 +     * stalling the turn. */
 +    const bool has_fallback = CONFIG_MUSE_STT_FALLBACK_URL[0] != '\0';
-+    bool ok = stt_post(CONFIG_MUSE_STT_URL, has_fallback ? STT_PRIMARY_TIMEOUT_MS : STT_TIMEOUT_MS);
-+    ESP_LOGI(TAG, "stt primary: %s", ok ? "ok" : "failed");
++    bool ok = false;
++    if (pick_first(SLOT_STT, CONFIG_MUSE_STT_URL, CONFIG_MUSE_STT_FALLBACK_URL) == 0) {
++        ok = stt_post(CONFIG_MUSE_STT_URL, has_fallback ? STT_PRIMARY_TIMEOUT_MS : STT_TIMEOUT_MS);
++        ESP_LOGI(TAG, "stt primary: %s", ok ? "ok" : "failed");
++    }
 +    if (!ok && has_fallback) {
 +        ok = stt_post(CONFIG_MUSE_STT_FALLBACK_URL, STT_TIMEOUT_MS);
 +        ESP_LOGI(TAG, "stt fallback: %s", ok ? "ok" : "failed");
@@ -655,7 +796,7 @@ index 05fe181..cb757f2 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1215,6 +1581,35 @@ static void post_chat(const char *text)
+@@ -1215,6 +1693,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -691,7 +832,7 @@ index 05fe181..cb757f2 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1399,6 +1794,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1399,6 +1906,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -749,7 +890,7 @@ index 05fe181..cb757f2 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1412,11 +1858,20 @@ static void on_event(cJSON *line)
+@@ -1412,11 +1970,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -773,7 +914,7 @@ index 05fe181..cb757f2 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1492,37 +1947,239 @@ static void on_chat_ack(stream_t *s)
+@@ -1492,37 +2059,246 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -805,12 +946,18 @@ index 05fe181..cb757f2 100644
 +    cJSON_AddStringToObject(body, "text", s_fetch.text);
 +    char *json = cJSON_PrintUnformatted(body);
 +    cJSON_Delete(body);
++    const char *urls[2] = { CONFIG_MUSE_TTS_URL, nullptr };
++    switch (pick_first(SLOT_TTS, CONFIG_MUSE_TTS_URL, CONFIG_MUSE_TTS_FALLBACK_URL)) {
++    case 1: urls[0] = CONFIG_MUSE_TTS_FALLBACK_URL; break;
++    default: if (CONFIG_MUSE_TTS_FALLBACK_URL[0]) urls[1] = CONFIG_MUSE_TTS_FALLBACK_URL;
++    }
++    for (int u = 0; u < 2 && urls[u] && !ok && json; u++) {
 +    esp_http_client_config_t cfg = {};
-+    cfg.url = CONFIG_MUSE_TTS_URL;
++    cfg.url = urls[u];
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
 +    cfg.timeout_ms = 15000;
-+    esp_http_client_handle_t h = json ? esp_http_client_init(&cfg) : nullptr;
++    esp_http_client_handle_t h = esp_http_client_init(&cfg);
 +    if (h) {
 +        esp_http_client_set_header(h, "Content-Type", "application/json");
 +        if (esp_http_client_open(h, strlen(json)) == ESP_OK &&
@@ -834,6 +981,7 @@ index 05fe181..cb757f2 100644
 +            ok = n > 0;
 +        }
 +        esp_http_client_cleanup(h);
++    }
 +    }
 +    free(json);
 +    ESP_LOGI(TAG, "tts fetch: %s, %u bytes", ok ? "ok" : "failed", (unsigned)s_fetch.len);
@@ -1030,7 +1178,7 @@ index 05fe181..cb757f2 100644
          show_reply_start(m);
          return;
      }
-@@ -1582,6 +2239,39 @@ static void decode(void)
+@@ -1582,6 +2358,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1070,7 +1218,7 @@ index 05fe181..cb757f2 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1656,6 +2346,9 @@ static void check_turn(void)
+@@ -1656,6 +2465,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1080,7 +1228,7 @@ index 05fe181..cb757f2 100644
          /* A typed turn waits as long as the agent says it's working. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !(text && s_turn.agent_busy)) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1864,9 +2557,27 @@ static bool poll_socket(void)
+@@ -1864,9 +2676,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1109,7 +1257,7 @@ index 05fe181..cb757f2 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1919,6 +2630,12 @@ static void handle(const cmd_t &cmd)
+@@ -1919,6 +2749,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1122,7 +1270,7 @@ index 05fe181..cb757f2 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1932,7 +2649,8 @@ static void hatch_task(void *arg)
+@@ -1932,7 +2768,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1132,7 +1280,7 @@ index 05fe181..cb757f2 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1940,11 +2658,27 @@ static void hatch_task(void *arg)
+@@ -1940,11 +2777,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1161,7 +1309,7 @@ index 05fe181..cb757f2 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1968,7 +2702,7 @@ static void hatch_task(void *arg)
+@@ -1968,7 +2821,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1170,7 +1318,7 @@ index 05fe181..cb757f2 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -1986,7 +2720,8 @@ static void hatch_task(void *arg)
+@@ -1986,7 +2839,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1180,7 +1328,7 @@ index 05fe181..cb757f2 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2083,6 +2818,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2083,6 +2937,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1197,7 +1345,7 @@ index 05fe181..cb757f2 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2115,6 +2860,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2115,6 +2979,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  

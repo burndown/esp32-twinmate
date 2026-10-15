@@ -149,7 +149,7 @@ function refresh(){
   $("asr_model_box").classList.toggle("hide", $("asr_provider").value !== "qwen3-asr-flash");
 }
 for (const id of ["llm_provider","tts_provider","asr_provider"]) $(id).addEventListener("change", () => {
-  if (id === "llm_provider") $("llm_model").value = (MODELS[$("llm_provider").value] || [""])[0] || "";
+  if (id === "llm_provider") { const first = (MODELS[$("llm_provider").value] || [])[0]; if (first) $("llm_model").value = first; }   // custom has no list: keep what was typed
   if (id === "tts_provider") { $("tts_voice").value = VOICES[$("tts_provider").value][0]; if ($("tts_provider").value === "cosyvoice") $("tts_model").value = TTS_MODELS[0]; }
   refresh();
 });
