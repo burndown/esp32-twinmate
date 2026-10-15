@@ -217,7 +217,7 @@ index 170e040..2f237a3 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 05fe181..a9a306d 100644
+index 05fe181..d576dd1 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -312,7 +312,7 @@ index 05fe181..a9a306d 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1004,16 +1017,481 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1004,16 +1017,498 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -404,6 +404,17 @@ index 05fe181..a9a306d 100644
 +    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
 +        strlcpy(out, (const char *)ap.ssid, cap);
 +    }
++}
++
++/* On the home Wi-Fi (CONFIG_MUSE_HOME_SSID); true when no home network is configured. */
++static bool at_home(void)
++{
++    if (!CONFIG_MUSE_HOME_SSID[0]) {
++        return true;
++    }
++    char ssid[33];
++    current_ssid(ssid, sizeof(ssid));
++    return strcmp(ssid, CONFIG_MUSE_HOME_SSID) == 0;
 +}
 +
 +/*
@@ -509,6 +520,12 @@ index 05fe181..a9a306d 100644
 +    xStreamBufferReset(s_brain.buf);
 +    if (text != s_brain.text) {
 +        strlcpy(s_brain.text, text, sizeof(s_brain.text));
++    }
++    if (!muse_down && !at_home()) {
++        /* Away from home Muse is usually out of reach: the brain answers at once, without Muse being asked first
++         * (and without a long wait for a connection that will not come). */
++        muse_down = true;
++        ESP_LOGI(TAG, "away from home: the brain answers, Muse is not asked");
 +    }
 +    s_brain.muse_down = muse_down;
 +    s_brain.gen = s_turn.gen;
@@ -796,7 +813,7 @@ index 05fe181..a9a306d 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1215,6 +1693,35 @@ static void post_chat(const char *text)
+@@ -1215,6 +1710,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -832,7 +849,7 @@ index 05fe181..a9a306d 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1399,6 +1906,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1399,6 +1923,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -890,7 +907,7 @@ index 05fe181..a9a306d 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1412,11 +1970,20 @@ static void on_event(cJSON *line)
+@@ -1412,11 +1987,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -914,7 +931,7 @@ index 05fe181..a9a306d 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1492,37 +2059,246 @@ static void on_chat_ack(stream_t *s)
+@@ -1492,37 +2076,246 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1178,7 +1195,7 @@ index 05fe181..a9a306d 100644
          show_reply_start(m);
          return;
      }
-@@ -1582,6 +2358,39 @@ static void decode(void)
+@@ -1582,6 +2375,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1218,7 +1235,7 @@ index 05fe181..a9a306d 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1656,6 +2465,9 @@ static void check_turn(void)
+@@ -1656,6 +2482,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1228,7 +1245,7 @@ index 05fe181..a9a306d 100644
          /* A typed turn waits as long as the agent says it's working. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !(text && s_turn.agent_busy)) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1864,9 +2676,27 @@ static bool poll_socket(void)
+@@ -1864,9 +2693,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1257,7 +1274,7 @@ index 05fe181..a9a306d 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1919,6 +2749,12 @@ static void handle(const cmd_t &cmd)
+@@ -1919,6 +2766,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1270,7 +1287,7 @@ index 05fe181..a9a306d 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1932,7 +2768,8 @@ static void hatch_task(void *arg)
+@@ -1932,7 +2785,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1280,7 +1297,7 @@ index 05fe181..a9a306d 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1940,11 +2777,27 @@ static void hatch_task(void *arg)
+@@ -1940,11 +2794,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1309,7 +1326,7 @@ index 05fe181..a9a306d 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1968,7 +2821,7 @@ static void hatch_task(void *arg)
+@@ -1968,7 +2838,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1318,7 +1335,7 @@ index 05fe181..a9a306d 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -1986,7 +2839,8 @@ static void hatch_task(void *arg)
+@@ -1986,7 +2856,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1328,7 +1345,7 @@ index 05fe181..a9a306d 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2083,6 +2937,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2083,6 +2954,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1345,7 +1362,7 @@ index 05fe181..a9a306d 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2115,6 +2979,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2115,6 +2996,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
