@@ -235,29 +235,31 @@ async function realIp(host) {
 
 async function botChat(req, env, ask) {
   const id = hex(8), tok = hex(16);
-  const origin = env.BOT_CALLBACK_BASE || new URL(req.url).origin;
   await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
-  const host = new URL(origin).hostname, port = new URL(origin).port || "443";
-  const ip = await realIp(host);
-  const hint = ip ? " 如果这个域名在你那里被解析成 198.18.x.x 之类的假地址，请改用真实地址：curl --resolve " + host + ":" + port + ":" + ip + " ，仍然使用上面的域名和 https。" : "";
-  const message = ask + "\n\n（这是桌上小圆屏设备的语音提问。请用中文纯文本简短回答，不要 Markdown。回答好以后，请用 HTTP POST 把答案发到 "
-    + origin + "/bot-reply/" + id + "/" + tok + " ，请求头 Content-Type: application/json，请求体 {\"reply\":\"你的回答\"}。请逐字使用这个地址（里面没有问号和 & 符号）。这个地址只用一次，10 分钟内有效，不需要任何密钥或其他请求头。" + hint + "）";
   const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
-  // The Webhook goes out through a relay when one is configured (GROKBOT_VIA, e.g. an SSH tunnel to a server with a better
-  // route to the bot), and straight when the relay is down.
-  const send = (url) => fetch(url, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message }), signal: AbortSignal.timeout(20000) });
+  // The message to the bot names where to send the answer: the relay's address when the Webhook goes out through the relay,
+  // the gateway's own public address (BOT_CALLBACK_FALLBACK) when the relay is down, so an answer is never sent to a dead road.
+  const messageFor = async (origin) => {
+    const host = new URL(origin).hostname, port = new URL(origin).port || "443";
+    const ip = await realIp(host);
+    const hint = ip ? " 如果这个域名在你那里被解析成 198.18.x.x 之类的假地址，请改用真实地址：curl --resolve " + host + ":" + port + ":" + ip + " ，仍然使用上面的域名和 https。" : "";
+    return ask + "\n\n（这是桌上小圆屏设备的语音提问。请用中文纯文本简短回答，不要 Markdown。回答好以后，请用 HTTP POST 把答案发到 "
+      + origin + "/bot-reply/" + id + "/" + tok + " ，请求头 Content-Type: application/json，请求体 {\"reply\":\"你的回答\"}。请逐字使用这个地址（里面没有问号和 & 符号）。这个地址只用一次，10 分钟内有效，不需要任何密钥或其他请求头。" + hint + "）";
+  };
+  const send = async (url, origin) => fetch(url, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message: await messageFor(origin) }), signal: AbortSignal.timeout(20000) });
+  const direct = env.BOT_CALLBACK_FALLBACK || env.BOT_CALLBACK_BASE || new URL(req.url).origin;
   let sent = null;
   if (env.GROKBOT_VIA) {
     try {
       const u = new URL(env.GROKBOT_URL);
-      const r = await send(new URL(u.pathname + u.search, env.GROKBOT_VIA).toString());
+      const r = await send(new URL(u.pathname + u.search, env.GROKBOT_VIA).toString(), env.BOT_CALLBACK_BASE || direct);
       console.log("bot webhook via relay", r.status);
       if (r.ok) sent = r; else if (r.status < 500) return null;   // the bot said no: not a relay problem
     } catch (e) { console.log("bot relay failed", String(e).slice(0, 100)); }
   }
   if (!sent) {
     try {
-      const r = await send(env.GROKBOT_URL);
+      const r = await send(env.GROKBOT_URL, direct);
       console.log("bot webhook", r.status);
       if (!r.ok) return null;           // the normal model answers instead
     } catch (e) { console.log("bot webhook failed", String(e).slice(0, 120)); return null; }
