@@ -7,7 +7,7 @@ import fs from "node:fs";
 const PORT = +process.env.PORT || 18443;
 const UP = { host: process.env.UP_HOST || "YOUR_LAN_IP", port: +process.env.UP_PORT || 8787 };
 const CERT = process.env.CERT, KEY = process.env.KEY;
-const ALLOWED = new Set(["/chat", "/tts", "/stt"]);
+const ALLOWED = new Set(["/chat", "/tts", "/stt", "/bot-reply"]);   // /bot-reply: a cloud bot calls back with a one-time token
 const MAX_BODY = 2 * 1024 * 1024;          // 60 s of 16 kHz PCM is about 2 MB
 const hits = new Map();                    // ip -> { t: [timestamps], bad: n, until: ms }
 
@@ -29,8 +29,12 @@ function reject(ip) {
 function ctx() { return { key: fs.readFileSync(KEY), cert: fs.readFileSync(CERT) }; }
 const server = https.createServer(ctx(), (req, res) => {
   const ip = client(req);
-  const path = (req.url || "").split("?")[0];
-  if (req.method !== "POST" || !ALLOWED.has(path)) { res.writeHead(404); return res.end("not found"); }
+  let path = (req.url || "").split("?")[0].replace(/\/+$/, "");
+  if (path.startsWith("/bot-reply/")) path = "/bot-reply";   // /bot-reply/<id>/<one-time token>
+  if (req.method !== "POST" || !ALLOWED.has(path)) {
+    console.log(`reject ${req.method} ${(req.url || "").split("?")[0].slice(0, 40)} ip=${client(req).replace(/^::ffff:/, "")}`);
+    res.writeHead(404); return res.end("not found");
+  }
   if (limited(ip)) { res.writeHead(429); return res.end("slow down"); }
   let size = 0;
   const t0 = Date.now();

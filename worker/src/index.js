@@ -241,7 +241,7 @@ async function botChat(req, env, ask) {
   const ip = await realIp(host);
   const hint = ip ? " 如果这个域名在你那里被解析成 198.18.x.x 之类的假地址，请改用真实地址：curl --resolve " + host + ":" + port + ":" + ip + " ，仍然使用上面的域名和 https。" : "";
   const message = ask + "\n\n（这是桌上小圆屏设备的语音提问。请用中文纯文本简短回答，不要 Markdown。回答好以后，请用 HTTP POST 把答案发到 "
-    + origin + "/bot-reply?id=" + id + "&t=" + tok + " ，请求头 Content-Type: application/json，请求体 {\"reply\":\"你的回答\"}。这个地址只用一次，10 分钟内有效，不需要任何密钥或其他请求头。" + hint + "）";
+    + origin + "/bot-reply/" + id + "/" + tok + " ，请求头 Content-Type: application/json，请求体 {\"reply\":\"你的回答\"}。请逐字使用这个地址（里面没有问号和 & 符号）。这个地址只用一次，10 分钟内有效，不需要任何密钥或其他请求头。" + hint + "）";
   const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
   try {
     const r = await fetch(env.GROKBOT_URL, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message }) });
@@ -269,7 +269,11 @@ async function botChat(req, env, ask) {
 
 async function botReply(req, env, url) {
   if (req.method !== "POST") return text("method", 405);
-  const id = url.searchParams.get("id") || "", t = url.searchParams.get("t") || "";
+  // The one-time token is in the path (/bot-reply/<id>/<token>), which no HTML escaping can touch; the older
+  // ?id=&t= form still works, including when a webhook turned "&" into "&amp;" and the parameter became "amp;t".
+  const seg = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean).slice(1);
+  const id = seg[0] || url.searchParams.get("id") || "";
+  const t = seg[1] || url.searchParams.get("t") || url.searchParams.get("amp;t") || "";
   const v = id ? await env.CFG.get("bot:" + id, "json").catch(() => null) : null;
   if (!v || v.tok !== t || v.text) return text("forbidden", 403);
   const b = await req.json().catch(() => null);
@@ -490,7 +494,7 @@ async function admin(req, env, url, all) {
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
-    if (url.pathname === "/bot-reply") return await botReply(req, env, url);   // the cloud bot calls this: a one-time token, not the gateway token
+    if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the cloud bot calls this: a one-time token, not the gateway token
     if (!env.GATEWAY_TOKEN || url.searchParams.get("k") !== env.GATEWAY_TOKEN) return text("forbidden", 403);
     const all = await loadAll(env);
     try {
