@@ -1,8 +1,17 @@
 diff --git a/esp32/components/muse/CMakeLists.txt b/esp32/components/muse/CMakeLists.txt
-index 73c8ffa..ffea565 100644
+index 73c8ffa..6554edd 100644
 --- a/esp32/components/muse/CMakeLists.txt
 +++ b/esp32/components/muse/CMakeLists.txt
-@@ -38,6 +38,7 @@ if(CONFIG_MUSE_ENABLED)
+@@ -29,6 +29,8 @@ if(CONFIG_MUSE_ENABLED)
+         "muse_state.c"
+         "muse_battery.c"
+         "muse_ui.c"
++        "muse_eyes.cpp"
++        "muse_imu.cpp"
+         "muse_audio.c"
+         "muse_pmu.c"
+         "muse_input.c"
+@@ -38,6 +40,7 @@ if(CONFIG_MUSE_ENABLED)
          "muse_settings.c"
          "muse_settings_ui.c"
          "muse_text.c"
@@ -95,6 +104,28 @@ index 1f65257..a15fa95 100644
      config MUSE_ENABLED
          bool
          default y if !MUSE_BOARD_NONE
+diff --git a/esp32/components/muse/boards/board_waveshare_s3_175c.c b/esp32/components/muse/boards/board_waveshare_s3_175c.c
+index 77b2e35..68aed26 100644
+--- a/esp32/components/muse/boards/board_waveshare_s3_175c.c
++++ b/esp32/components/muse/boards/board_waveshare_s3_175c.c
+@@ -25,6 +25,7 @@
+  * and MCLK to 42. GPIO 1 to 3 go to its SD slot, so PWR is read from the PMU's
+  * key latch, and BOOT talks: held long, PWR makes the PMU cut power.
+  */
++#include "muse_eyes.h"
+ #include "bsp/display.h"
+ #include "bsp/esp-bsp.h"
+ #include "bsp/touch.h"
+@@ -61,6 +62,9 @@ static muse_gpio_button_t s_pwr;
+ static esp_err_t init(void)
+ {
+     ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "i2c init");
++#if !CONFIG_MUSE_BOARD_WAVESHARE_S3_175
++    muse_imu_start(bsp_i2c_get_handle());   /* tilt and shake for the eyes (QMI8658); a missing chip is only logged */
++#endif
+     ESP_RETURN_ON_ERROR(muse_gpio_button_init(&s_boot, GPIO_NUM_0), TAG, "boot button");
+ #if CONFIG_MUSE_BOARD_WAVESHARE_S3_175
+     /* Only the PMU sees PWR: latch its edges for poll_buttons(). */
 diff --git a/esp32/components/muse/boards/muse_lcd_bands.c b/esp32/components/muse/boards/muse_lcd_bands.c
 index e7d0ef0..17ac3cc 100644
 --- a/esp32/components/muse/boards/muse_lcd_bands.c
@@ -217,7 +248,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..f0a63b3 100644
+index 2866f5d..90303c2 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -1322,7 +1353,7 @@ index 2866f5d..f0a63b3 100644
                  s_auto_next_us = 0;
                  s_auto_backoff_us = AUTO_RETRY_MIN_US;
 -            } else if (muse_hatch_configured() && now_us() >= s_auto_next_us) {
-+            } else if (muse_hatch_configured() &&
++            } else if (muse_hatch_configured() && at_home() &&   /* away from home Muse is usually out of reach: no attempts */
 +                       (now_us() >= s_auto_next_us || (s_auto_next_us == INT64_MAX && muse_settings_pushes_on())) &&
 +                       !(s_turn.local_stt && s_turn.phase != P_IDLE)) {
 +                /* Closed when idle, then All messages turned on: connect again for pushes. */
@@ -1409,6 +1440,743 @@ index 2866f5d..f0a63b3 100644
  extern "C" void muse_hatch_text_cancel(void)
  {
      post(CMD_TEXT_CANCEL, 0);
+diff --git a/esp32/components/muse/muse_eye_model.h b/esp32/components/muse/muse_eye_model.h
+new file mode 100644
+index 0000000..fb18bd6
+--- /dev/null
++++ b/esp32/components/muse/muse_eye_model.h
+@@ -0,0 +1,192 @@
++#pragma once
++// Eye shapes and idle motion for the optional "eyes" avatar.
++//
++// Adapted from zongzhu-bot (https://github.com/Liu-zhongxian/zongzhu-bot, xiaozhi-esp32/main/boards/common/zongzhu/eye_model.h),
++// MIT License, Copyright (c) 2025 Shenzhen Xinzhi Future Technology Co., Ltd.
++// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation
++// files (the "Software"), to deal in the Software without restriction, subject to the MIT License's conditions: this notice
++// and the license text must be included in copies or substantial portions of the Software, which is provided "AS IS",
++// without warranty of any kind.
++// Zongzhu eye model: per-mood eye shapes and idle motion, independent of LVGL
++// so it can be checked on the host. Units are screen pixels at full size.
++
++#include <cmath>
++#include <cstdint>
++
++namespace eyes {
++
++enum class Mood : uint8_t {
++    Idle,
++    Listening,
++    Thinking,
++    Speaking,
++    Happy,
++    Excited,
++    Curious,
++    Confused,
++    Angry,
++    Surprised,
++    Sad,
++    Sleepy,
++    Dizzy,
++    Count
++};
++
++// One eye, relative to its home position.
++struct Shape {
++    float dx = 0, dy = 0;  // offset from home
++    float w = 76, h = 150; // body size
++    float tilt = 0;        // degrees, clockwise
++    float lid = 0;         // 0..1 of the body hidden from the top
++    float lid_tilt = 0;    // degrees of the lid edge, clockwise
++    float arc = 0;         // +1 happy cap, -1 sleepy slit, 0 plain body
++    float spin = 0;        // 0..1 dizzy swirl
++};
++
++struct Face {
++    Shape left, right;  // screen left / right
++};
++
++constexpr float kHomeX = 100;      // half the distance between eye centres
++constexpr float kMaxReach = 200;   // nothing may leave this radius from the face centre
++
++inline float Wave(float t, float hz, float phase = 0) {
++    return std::sin((t * hz + phase) * 6.2831853f);
++}
++
++// Mirror a left-eye shape to the right eye.
++inline Shape Mirror(Shape s) {
++    s.dx = -s.dx;
++    s.tilt = -s.tilt;
++    s.lid_tilt = -s.lid_tilt;
++    return s;
++}
++
++inline Face FaceFor(Mood mood, float t) {
++    Shape l;
++    Face f;
++    switch (mood) {
++        case Mood::Listening:
++            l.w = 82;
++            l.h = 140 + 6 * Wave(t, 0.9f);
++            l.tilt = -4;
++            l.dy = -4;
++            f = {l, Mirror(l)};
++            f.right.h = 140 - 6 * Wave(t, 0.9f);
++            break;
++        case Mood::Thinking:
++            l.w = 80;
++            l.h = 124;
++            l.dx = -16 + 6 * Wave(t, 0.25f);
++            l.dy = -18;
++            f = {l, l};
++            f.right.h = 108;
++            f.right.lid = 0.18f;
++            f.right.lid_tilt = -8;
++            break;
++        case Mood::Speaking:
++            l.w = 80 - 3 * Wave(t, 5.3f);
++            l.h = 136 + 9 * Wave(t, 5.3f) + 5 * Wave(t, 3.1f, 0.3f);
++            f = {l, l};
++            break;
++        case Mood::Happy:
++            l.arc = 1;
++            l.w = 104;
++            l.h = 104;
++            l.dy = 8 + 4 * std::fabs(Wave(t, 1.6f));
++            l.tilt = -6;
++            f = {l, Mirror(l)};
++            break;
++        case Mood::Excited:
++            l.w = 94;
++            l.h = 156;
++            l.dy = -6 - 6 * std::fabs(Wave(t, 2.4f));
++            f = {l, l};
++            break;
++        case Mood::Curious:
++            l.w = 86;
++            l.h = 166;
++            l.tilt = -6;
++            l.dy = -6;
++            f = {l, l};
++            f.right.w = 70;
++            f.right.h = 112;
++            f.right.lid = 0.12f;
++            break;
++        case Mood::Confused:
++            l.w = 80;
++            l.h = 132 + 10 * Wave(t, 0.6f);
++            l.tilt = 8;
++            f = {l, l};
++            f.right.h = 112 - 10 * Wave(t, 0.6f);
++            f.right.tilt = -5;
++            f.right.dy = -10;
++            break;
++        case Mood::Angry:
++            l.w = 92;
++            l.h = 118;
++            l.dy = 4;
++            l.lid = 0.36f;
++            l.lid_tilt = 16;  // inner edge lower
++            f = {l, Mirror(l)};
++            break;
++        case Mood::Surprised:
++            l.w = l.h = 118 + 4 * Wave(t, 1.2f);
++            l.dy = -10;
++            f = {l, l};
++            break;
++        case Mood::Sad:
++            l.w = 86;
++            l.h = 108;
++            l.dy = 20 + 3 * Wave(t, 0.4f);
++            l.lid = 0.3f;
++            l.lid_tilt = -14;  // outer edge lower
++            f = {l, Mirror(l)};
++            break;
++        case Mood::Sleepy:
++            l.arc = -1;
++            l.w = 112;
++            l.h = 112;
++            l.dy = 26 + 4 * Wave(t, 0.22f);
++            l.tilt = 4;
++            f = {l, Mirror(l)};
++            break;
++        case Mood::Dizzy:
++            l.w = l.h = 108;
++            l.spin = 1;
++            l.dx = 7 * Wave(t, 0.9f);
++            l.dy = 7 * Wave(t, 0.9f, 0.25f);
++            f = {l, l};
++            f.right.dx = -l.dx;
++            break;
++        default:  // Idle
++            l.h = 150 + 3 * Wave(t, 0.3f);
++            l.dy = 2 * Wave(t, 0.17f);
++            f = {l, l};
++            break;
++    }
++    return f;
++}
++
++inline float Lerp(float a, float b, float k) { return a + (b - a) * k; }
++
++inline Shape Mix(const Shape& a, const Shape& b, float k) {
++    Shape s;
++    s.dx = Lerp(a.dx, b.dx, k);
++    s.dy = Lerp(a.dy, b.dy, k);
++    s.w = Lerp(a.w, b.w, k);
++    s.h = Lerp(a.h, b.h, k);
++    s.tilt = Lerp(a.tilt, b.tilt, k);
++    s.lid = Lerp(a.lid, b.lid, k);
++    s.lid_tilt = Lerp(a.lid_tilt, b.lid_tilt, k);
++    s.arc = Lerp(a.arc, b.arc, k);
++    s.spin = Lerp(a.spin, b.spin, k);
++    return s;
++}
++
++// Frame-rate independent easing: fraction of the remaining distance to cover.
++inline float Ease(float dt_ms, float rate_per_s = 11) {
++    return 1.0f - std::exp(-dt_ms * 0.001f * rate_per_s);
++}
++
++}  // namespace eyes
+diff --git a/esp32/components/muse/muse_eyes.cpp b/esp32/components/muse/muse_eyes.cpp
+new file mode 100644
+index 0000000..3c00f65
+--- /dev/null
++++ b/esp32/components/muse/muse_eyes.cpp
+@@ -0,0 +1,489 @@
++/*
++ * The eyes avatar. Two white shapes, drawn directly with solid fills (no images, no transforms): only the bounds of each
++ * eye, old and new, are redrawn from frame to frame, and nothing is drawn when a frame looks like the last.
++ *
++ * Adapted from zongzhu-bot (https://github.com/Liu-zhongxian/zongzhu-bot, xiaozhi-esp32/main/boards/common/zongzhu/
++ * eye_display.h), MIT License, Copyright (c) 2025 Shenzhen Xinzhi Future Technology Co., Ltd.; see muse_eye_model.h for the
++ * license notice. What changed: it draws on an LVGL object inside Muse's face tile instead of xiaozhi's display class, takes its
++ * mood from Muse's state, follows the pixel avatar's place and size while a reply is up, takes touch from LVGL events (the
++ * left and right swipes belong to Muse's settings), and the speaking eyes follow the voice.
++ */
++
++#include "muse_eyes.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cmath>
++#include <cstring>
++
++extern "C" {
++#include "esp_log.h"
++#include "esp_random.h"
++}
++
++#include "muse_eye_model.h"
++
++static const char *TAG = "muse_eyes";
++
++namespace {
++
++constexpr float kBaseScale = 0.95f;     /* eye_model.h's size at the pixel avatar's full size */
++constexpr int kObjH = 320;              /* the eyes' drawing area; wide as the screen */
++constexpr float kFollowPx = 150;        /* finger offset for full gaze */
++
++/* Integer geometry of one eye in object coordinates; compared frame to frame so unchanged frames cost nothing. */
++struct EyeGeom {
++    int32_t cx = 0, cy = 0, w = 0, h = 0, tilt10 = 0, body_opa = 0;
++    int32_t lid_on = 0, lid_l = 0, lid_r = 0;
++    int32_t swirl_opa = 0, swirl_d = 0, swirl_rot = 0;
++    int32_t cap_opa = 0, cap_d = 0, cap_w = 0, cap_cy = 0, cap_up = 0, cap_rot = 0;
++    lv_area_t box{0, 0, -1, -1};
++    bool operator==(const EyeGeom &o) const { return memcmp(this, &o, sizeof(*this)) == 0; }
++};
++
++class Eyes {
++public:
++    void Build(lv_obj_t *face, int screen_w)
++    {
++        screen_w_ = screen_w;
++        obj_ = lv_obj_create(face);
++        lv_obj_remove_style_all(obj_);
++        lv_obj_set_size(obj_, screen_w, kObjH);
++        lv_obj_remove_flag(obj_, LV_OBJ_FLAG_SCROLLABLE);
++        lv_obj_add_flag(obj_, LV_OBJ_FLAG_CLICKABLE);
++        lv_obj_add_flag(obj_, LV_OBJ_FLAG_HIDDEN);
++        lv_obj_add_event_cb(obj_, [](lv_event_t *e) { static_cast<Eyes *>(lv_event_get_user_data(e))->Draw(lv_event_get_layer(e)); },
++                            LV_EVENT_DRAW_MAIN, this);
++        lv_obj_add_event_cb(obj_, [](lv_event_t *e) { static_cast<Eyes *>(lv_event_get_user_data(e))->OnTouch(e); }, LV_EVENT_ALL,
++                            this);
++        last_tick_ = lv_tick_get();
++    }
++
++    void Show(bool on)
++    {
++        if (!obj_ || on == visible_) {
++            return;
++        }
++        visible_ = on;
++        lv_obj_set_flag(obj_, LV_OBJ_FLAG_HIDDEN, !on);
++        if (on) {
++            memset(geom_, 0, sizeof(geom_));
++            last_tick_ = lv_tick_get();
++            lv_obj_invalidate(obj_);
++        }
++    }
++
++    bool Visible() const { return visible_; }
++
++    void Place(int y, int avatar_px, int full_px)
++    {
++        if (!obj_) {
++            return;
++        }
++        const float scale = kBaseScale * static_cast<float>(avatar_px) / static_cast<float>(full_px);
++        if (y == place_y_ && std::fabs(scale - scale_) < 0.002f) {
++            return;
++        }
++        if (visible_) {
++            lv_obj_invalidate(obj_);   /* the old pixels, before the object moves */
++        }
++        place_y_ = y;
++        scale_ = scale;
++        lv_obj_align(obj_, LV_ALIGN_CENTER, 0, y);
++        if (visible_) {
++            lv_obj_invalidate(obj_);
++        }
++    }
++
++    void SetTilt(float x, float y)
++    {
++        tilt_x_.store(x, std::memory_order_relaxed);
++        tilt_y_.store(y, std::memory_order_relaxed);
++    }
++    void SetDizzy(bool on) { dizzy_.store(on, std::memory_order_relaxed); }
++    void SetTouchCb(void (*cb)(void)) { touch_cb_ = cb; }
++
++    void Tick(muse_mode_t mode, float level, float happiness)
++    {
++        if (!obj_ || !visible_) {
++            return;
++        }
++        const uint32_t now = lv_tick_get();
++        const float dt = std::min<uint32_t>(now - last_tick_, 100);
++        last_tick_ = now;
++        FinishTap(now);
++        if (happiness > 0.5f && static_cast<int32_t>(reaction_until_ - now) <= 0) {
++            React(eyes::Mood::Happy, now, 1200);   /* a tap on Muse's own avatar, or any other petting */
++        }
++        const eyes::Mood mood = CurrentMood(mode, now);
++        UpdateGaze(now, dt, mood);
++        const float blink = BlinkFactor(now, mood);
++
++        eyes::Face target = eyes::FaceFor(mood, now / 1000.0f);
++        if (mood == eyes::Mood::Speaking) {   /* the mouth is the eyes: they swell with the voice */
++            target.left.h += 34 * level;
++            target.right.h += 34 * level;
++        }
++        const float k = eyes::Ease(dt, mood == eyes::Mood::Dizzy ? 16 : 11);
++        face_.left = eyes::Mix(face_.left, target.left, k);
++        face_.right = eyes::Mix(face_.right, target.right, k);
++
++        const float half = eyes::kHomeX * scale_;
++        const float cx = screen_w_ / 2.0f, cy = kObjH / 2.0f;
++        const EyeGeom next[2] = {ComputeEye(face_.left, cx - half, cy, blink, now, 0), ComputeEye(face_.right, cx + half, cy, blink, now, 1)};
++        for (int i = 0; i < 2; ++i) {
++            if (!(next[i] == geom_[i])) {
++                Invalidate(geom_[i].box, next[i].box);
++                geom_[i] = next[i];
++            }
++        }
++    }
++
++private:
++    lv_obj_t *obj_ = nullptr;
++    int screen_w_ = 466;
++    bool visible_ = false;
++    int place_y_ = 0x7fffffff;
++    float scale_ = kBaseScale;
++    EyeGeom geom_[2];
++    eyes::Face face_ = eyes::FaceFor(eyes::Mood::Idle, 0);
++    uint32_t last_tick_ = 0;
++
++    /* Blink: quick close, short hold, slower open; sometimes twice in a row. */
++    uint32_t next_blink_ = 2500, blink_start_ = 0;
++    bool blinking_ = false, double_blink_ = false;
++
++    /* Small idle glances, combined with tilt and touch gaze. */
++    uint32_t next_glance_ = 1500;
++    float glance_x_ = 0, glance_y_ = 0, gaze_x_ = 0, gaze_y_ = 0;
++    std::atomic<float> tilt_x_{0}, tilt_y_{0};
++    std::atomic<bool> dizzy_{false};
++
++    /* Touch reactions sit on top of the mood, then expire. */
++    eyes::Mood reaction_ = eyes::Mood::Idle;
++    uint32_t reaction_until_ = 0;
++    void (*touch_cb_)(void) = nullptr;
++    bool pressed_ = false, follow_ = false, moved_ = false, committed_ = false;
++    lv_point_t press_pt_{}, pt_{};
++    uint32_t press_time_ = 0, pending_tap_ = 0;
++
++    void React(eyes::Mood m, uint32_t now, uint32_t ms = 2000)
++    {
++        reaction_ = m;
++        reaction_until_ = now + ms;
++    }
++
++    eyes::Mood CurrentMood(muse_mode_t mode, uint32_t now) const
++    {
++        using eyes::Mood;
++        if (dizzy_.load(std::memory_order_relaxed)) {
++            return Mood::Dizzy;
++        }
++        if (static_cast<int32_t>(reaction_until_ - now) > 0) {
++            return reaction_;
++        }
++        switch (mode) {
++        case MUSE_MODE_LISTENING: return Mood::Listening;
++        case MUSE_MODE_THINKING: return Mood::Thinking;
++        case MUSE_MODE_SPEAKING: return Mood::Speaking;
++        case MUSE_MODE_ERROR: return Mood::Confused;
++        case MUSE_MODE_BOOT:
++        case MUSE_MODE_OFF: return Mood::Sleepy;
++        default: return Mood::Idle;
++        }
++    }
++
++    /* A single tap is Happy once the double-tap window has passed. */
++    void FinishTap(uint32_t now)
++    {
++        if (pending_tap_ && now - pending_tap_ > 280) {
++            pending_tap_ = 0;
++            React(eyes::Mood::Happy, now);
++        }
++    }
++
++    void OnTouch(lv_event_t *e)
++    {
++        const lv_event_code_t code = lv_event_get_code(e);
++        lv_indev_t *indev = lv_indev_active();
++        const uint32_t now = lv_tick_get();
++        if (code == LV_EVENT_PRESSED) {
++            if (indev) {
++                lv_indev_get_point(indev, &press_pt_);
++            }
++            pt_ = press_pt_;
++            pressed_ = true;
++            follow_ = moved_ = committed_ = false;
++            press_time_ = now;
++            if (touch_cb_) {
++                touch_cb_();
++            }
++        } else if (code == LV_EVENT_PRESSING) {
++            if (indev) {
++                lv_indev_get_point(indev, &pt_);
++            }
++            const int dx = pt_.x - press_pt_.x, dy = pt_.y - press_pt_.y;
++            if (std::max(std::abs(dx), std::abs(dy)) >= 14) {
++                moved_ = true;
++            }
++            if (moved_ && !committed_ && now - press_time_ >= 220) {
++                follow_ = true;   /* held and dragged: the eyes follow the finger */
++            }
++        } else if (code == LV_EVENT_LONG_PRESSED) {
++            if (!moved_ && !committed_) {
++                React(eyes::Mood::Angry, now);
++                committed_ = true;
++            }
++        } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
++            if (pressed_ && code == LV_EVENT_RELEASED && !follow_ && !committed_) {
++                const int dx = pt_.x - press_pt_.x, dy = pt_.y - press_pt_.y;
++                if (std::abs(dy) >= 60 && std::abs(dy) > std::abs(dx)) {   /* up: surprised, down: sleepy */
++                    React(dy < 0 ? eyes::Mood::Surprised : eyes::Mood::Sleepy, now, 3000);
++                } else if (!moved_) {
++                    if (pending_tap_) {
++                        pending_tap_ = 0;
++                        React(eyes::Mood::Surprised, now);   /* double tap */
++                    } else {
++                        pending_tap_ = std::max<uint32_t>(now, 1);
++                    }
++                }
++            }
++            pressed_ = follow_ = false;
++        }
++    }
++
++    float BlinkFactor(uint32_t now, eyes::Mood mood)
++    {
++        using eyes::Mood;
++        constexpr uint32_t kClose = 70, kHold = 30, kOpen = 140;
++        const bool allowed = mood != Mood::Happy && mood != Mood::Sleepy && mood != Mood::Dizzy && mood != Mood::Surprised;
++        if (!blinking_) {
++            if (static_cast<int32_t>(now - next_blink_) < 0 || !allowed) {
++                return 1.0f;
++            }
++            blinking_ = true;
++            blink_start_ = now;
++        }
++        const uint32_t age = now - blink_start_;
++        float k;
++        if (age < kClose) {
++            k = 1.0f - static_cast<float>(age) / kClose;
++        } else if (age < kClose + kHold) {
++            k = 0;
++        } else if (age < kClose + kHold + kOpen) {
++            k = static_cast<float>(age - kClose - kHold) / kOpen;
++        } else {
++            blinking_ = false;
++            if (!double_blink_ && esp_random() % 5 == 0) {
++                double_blink_ = true;
++                next_blink_ = now + 90;
++            } else {
++                double_blink_ = false;
++                next_blink_ = now + 2600 + esp_random() % 3400;
++            }
++            return 1.0f;
++        }
++        return std::max(0.06f, k);
++    }
++
++    void UpdateGaze(uint32_t now, float dt, eyes::Mood mood)
++    {
++        using eyes::Mood;
++        const bool glancing = mood == Mood::Idle || mood == Mood::Listening || mood == Mood::Speaking;
++        if (static_cast<int32_t>(now - next_glance_) >= 0) {
++            next_glance_ = now + 1200 + esp_random() % 2300;
++            const bool home = !glancing || esp_random() % 3 == 0;
++            glance_x_ = home ? 0 : ((esp_random() % 1000) / 1000.0f - 0.5f) * 0.7f;
++            glance_y_ = home ? 0 : ((esp_random() % 1000) / 1000.0f - 0.5f) * 0.4f;
++        }
++        float gx = tilt_x_.load(std::memory_order_relaxed) + glance_x_;
++        float gy = tilt_y_.load(std::memory_order_relaxed) + glance_y_;
++        if (pressed_ && follow_) {
++            lv_area_t a;
++            lv_obj_get_coords(obj_, &a);
++            gx = (pt_.x - (a.x1 + a.x2) / 2) / kFollowPx;
++            gy = (pt_.y - (a.y1 + a.y2) / 2) / kFollowPx;
++        }
++        /* Glances snap (saccade-like); everything else eases. */
++        const float k = eyes::Ease(dt, pressed_ ? 14 : 18);
++        gaze_x_ += (std::clamp(gx, -1.0f, 1.0f) - gaze_x_) * k;
++        gaze_y_ += (std::clamp(gy, -1.0f, 1.0f) - gaze_y_) * k;
++    }
++
++    EyeGeom ComputeEye(const eyes::Shape &s, float home_x, float center_y, float blink, uint32_t now, int index) const
++    {
++        EyeGeom g;
++        const float scale = scale_;
++        const float shape_weight = 1.0f - std::min(1.0f, std::fabs(s.arc));
++        g.cx = std::lround(home_x + (s.dx + gaze_x_ * 34) * scale);
++        g.cy = std::lround(center_y + (s.dy + gaze_y_ * 26) * scale);
++        int32_t x1 = g.cx, y1 = g.cy, x2 = g.cx, y2 = g.cy;
++        auto grow = [&](int32_t l, int32_t t, int32_t r, int32_t b) {
++            x1 = std::min(x1, l);
++            y1 = std::min(y1, t);
++            x2 = std::max(x2, r);
++            y2 = std::max(y2, b);
++        };
++        if (shape_weight >= 0.03f) {
++            g.w = std::max<int32_t>(4, std::lround(s.w * scale));
++            g.h = std::max<int32_t>(4, std::lround(s.h * scale * blink * shape_weight));
++            g.body_opa = std::lround(255 * shape_weight);
++            g.tilt10 = g.h > g.w ? std::lround(s.tilt * 10) : 0;
++            /* Tilted bodies are drawn as a round-capped thick line; reach covers both. */
++            const int32_t reach = std::max(g.w, g.h) / 2 + 2;
++            grow(g.cx - reach, g.cy - reach, g.cx + reach, g.cy + reach);
++            if (s.lid >= 0.01f) {
++                const float edge = g.cy - g.h / 2.0f + s.lid * g.h;
++                const float slope = std::tan(s.lid_tilt * 0.0174533f) * g.w / 2;
++                g.lid_on = 1;
++                g.lid_l = std::lround(edge - slope);
++                g.lid_r = std::lround(edge + slope);
++            }
++            const int32_t d = std::min(g.w, g.h);
++            if (s.spin >= 0.05f && d >= 20) {
++                g.swirl_opa = std::lround(255 * s.spin);
++                g.swirl_d = d;
++                g.swirl_rot = static_cast<int32_t>(now * 0.42f) % 360 + index * 90;
++            }
++        }
++        const float arc_weight = std::min(1.0f, std::fabs(s.arc));
++        if (arc_weight >= 0.03f) {
++            g.cap_up = s.arc > 0;
++            g.cap_opa = std::lround(255 * arc_weight);
++            g.cap_d = std::max<int32_t>(10, std::lround(s.w * scale));
++            g.cap_w = std::max<int32_t>(3, std::lround(g.cap_d * (g.cap_up ? 0.22f : 0.085f)));
++            g.cap_cy = g.cy + std::lround(g.cap_d * (g.cap_up ? 0.22f : -0.28f));
++            g.cap_rot = std::lround(s.tilt);
++            const int32_t r = g.cap_d / 2 + 2;
++            grow(g.cx - r, g.cap_cy - r, g.cx + r, g.cap_cy + r);
++        }
++        g.box = {x1, y1, x2, y2};
++        return g;
++    }
++
++    void Draw(lv_layer_t *layer)
++    {
++        lv_area_t origin;
++        lv_obj_get_coords(obj_, &origin);
++        for (const auto &g : geom_) {
++            DrawEye(layer, g, origin.x1, origin.y1);
++        }
++    }
++
++    static void DrawEye(lv_layer_t *layer, const EyeGeom &g, int32_t ox, int32_t oy)
++    {
++        const int32_t cx = ox + g.cx, cy = oy + g.cy;
++        if (g.body_opa > 0) {
++            if (g.tilt10 == 0) {
++                lv_draw_rect_dsc_t body;
++                lv_draw_rect_dsc_init(&body);
++                body.bg_color = lv_color_white();
++                body.bg_opa = g.body_opa;
++                body.radius = LV_RADIUS_CIRCLE;
++                const lv_area_t area = {cx - g.w / 2, cy - g.h / 2, cx - g.w / 2 + g.w - 1, cy - g.h / 2 + g.h - 1};
++                lv_draw_rect(layer, &body, &area);
++            } else {
++                /* Tilted pill: a thick line with round ends along the eye's long axis. */
++                const float a = g.tilt10 * 0.00174533f;
++                const float half = (g.h - g.w) / 2.0f;
++                lv_draw_line_dsc_t line;
++                lv_draw_line_dsc_init(&line);
++                line.color = lv_color_white();
++                line.opa = g.body_opa;
++                line.width = g.w;
++                line.round_start = line.round_end = 1;
++                line.p1 = {static_cast<lv_value_precise_t>(cx - std::sin(a) * half), static_cast<lv_value_precise_t>(cy + std::cos(a) * half)};
++                line.p2 = {static_cast<lv_value_precise_t>(cx + std::sin(a) * half), static_cast<lv_value_precise_t>(cy - std::cos(a) * half)};
++                lv_draw_line(layer, &line);
++            }
++            if (g.lid_on) {
++                /* Black wedge over the top of the eye; its lower edge is the lid line. */
++                const int32_t reach = std::max(g.w, g.h) / 2 + 2;
++                const lv_value_precise_t l = cx - reach, r = cx + reach, top = cy - reach;
++                const float k = static_cast<float>(g.lid_r - g.lid_l) / std::max<int32_t>(1, g.w);
++                const lv_value_precise_t yl = oy + g.lid_l - k * (reach - g.w / 2);
++                const lv_value_precise_t yr = oy + g.lid_r + k * (reach - g.w / 2);
++                lv_draw_triangle_dsc_t tri;
++                lv_draw_triangle_dsc_init(&tri);
++                tri.color = lv_color_black();
++                tri.opa = LV_OPA_COVER;
++                tri.p[0] = {l, top};
++                tri.p[1] = {r, top};
++                tri.p[2] = {r, yr};
++                lv_draw_triangle(layer, &tri);
++                tri.p[1] = {r, yr};
++                tri.p[2] = {l, yl};
++                lv_draw_triangle(layer, &tri);
++            }
++            if (g.swirl_opa > 0) {
++                lv_draw_arc_dsc_t arc;
++                lv_draw_arc_dsc_init(&arc);
++                arc.color = lv_color_black();
++                arc.opa = g.swirl_opa;
++                arc.center = {cx, cy};
++                arc.width = std::max<int32_t>(3, g.swirl_d / 11);
++                arc.rounded = 1;
++                for (int r = 0; r < 2; ++r) {
++                    const int32_t turn = r ? 360 - g.swirl_rot % 360 : g.swirl_rot;
++                    arc.radius = static_cast<uint16_t>(g.swirl_d * (r ? 0.2f : 0.37f));
++                    arc.start_angle = turn;
++                    arc.end_angle = turn + (r ? 220 : 260);
++                    lv_draw_arc(layer, &arc);
++                }
++            }
++        }
++        if (g.cap_opa > 0) {
++            lv_draw_arc_dsc_t arc;
++            lv_draw_arc_dsc_init(&arc);
++            arc.color = lv_color_white();
++            arc.opa = g.cap_opa;
++            arc.center = {cx, oy + g.cap_cy};
++            arc.radius = static_cast<uint16_t>(g.cap_d / 2);
++            arc.width = g.cap_w;
++            arc.rounded = 1;
++            arc.start_angle = (g.cap_up ? 182 : 32) + g.cap_rot;
++            arc.end_angle = (g.cap_up ? 358 : 148) + g.cap_rot;
++            lv_draw_arc(layer, &arc);
++        }
++    }
++
++    void Invalidate(const lv_area_t &a, const lv_area_t &b)
++    {
++        lv_area_t origin;
++        lv_obj_get_coords(obj_, &origin);
++        lv_area_t u = a;
++        if (b.x2 >= b.x1) {
++            if (u.x2 < u.x1) {
++                u = b;
++            } else {
++                u = {std::min(a.x1, b.x1), std::min(a.y1, b.y1), std::max(a.x2, b.x2), std::max(a.y2, b.y2)};
++            }
++        }
++        if (u.x2 < u.x1) {
++            return;
++        }
++        lv_area_move(&u, origin.x1, origin.y1);
++        lv_obj_invalidate_area(obj_, &u);
++    }
++};
++
++Eyes s_eyes;
++
++} /* namespace */
++
++extern "C" {
++
++void muse_eyes_build(lv_obj_t *face, int screen_w)
++{
++    s_eyes.Build(face, screen_w);
++    ESP_LOGI(TAG, "eyes ready");
++}
++void muse_eyes_show(bool on) { s_eyes.Show(on); }
++bool muse_eyes_visible(void) { return s_eyes.Visible(); }
++void muse_eyes_place(int y, int avatar_px, int full_px) { s_eyes.Place(y, avatar_px, full_px); }
++void muse_eyes_tick(muse_mode_t mode, float level, float happiness) { s_eyes.Tick(mode, level, happiness); }
++void muse_eyes_tilt(float x, float y) { s_eyes.SetTilt(x, y); }
++void muse_eyes_dizzy(bool on) { s_eyes.SetDizzy(on); }
++void muse_eyes_set_touch_cb(void (*cb)(void)) { s_eyes.SetTouchCb(cb); }
++
++} /* extern "C" */
+diff --git a/esp32/components/muse/muse_eyes.h b/esp32/components/muse/muse_eyes.h
+new file mode 100644
+index 0000000..8b8e68f
+--- /dev/null
++++ b/esp32/components/muse/muse_eyes.h
+@@ -0,0 +1,38 @@
++/*
++ * An optional avatar: two white eyes that blink, glance around, follow a finger, tilt with the board and change shape with
++ * Muse's state. The shapes and the gestures are adapted from zongzhu-bot (MIT, see muse_eye_model.h).
++ */
++
++#pragma once
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#include "lvgl.h"
++#include "muse_state.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* In the LVGL task (display lock held): creates the eyes on `face`, hidden. screen_w is the face tile's width. */
++void muse_eyes_build(lv_obj_t *face, int screen_w);
++/* Shows or hides them (the pixel avatar is hidden or shown by the caller). */
++void muse_eyes_show(bool on);
++bool muse_eyes_visible(void);
++/* Centre (offset from the screen's centre) and size of the pixel avatar they replace; they follow it. */
++void muse_eyes_place(int y, int avatar_px, int full_px);
++/* One frame, from the UI's frame timer. */
++void muse_eyes_tick(muse_mode_t mode, float level, float happiness);
++/* From the IMU task: tilt -1..1 in screen coordinates (+x right, +y down), and the shake gesture. */
++void muse_eyes_tilt(float x, float y);
++void muse_eyes_dizzy(bool on);
++/* Called on each touch of the eyes, so the UI can wake. */
++void muse_eyes_set_touch_cb(void (*cb)(void));
++
++/* muse_imu.cpp: starts the tilt and shake input on the board's I2C bus (QMI8658). False if the chip isn't there. */
++bool muse_imu_start(void *i2c_master_bus_handle);
++
++#ifdef __cplusplus
++}
++#endif
 diff --git a/esp32/components/muse/muse_font_cjk16.c b/esp32/components/muse/muse_font_cjk16.c
 new file mode 100644
 index 0000000..e0aa514
@@ -22753,37 +23521,279 @@ index 0000000..e0aa514
 +    .underline_thickness = 0,
 +    .dsc = &font_dsc
 +};
+diff --git a/esp32/components/muse/muse_imu.cpp b/esp32/components/muse/muse_imu.cpp
+new file mode 100644
+index 0000000..e6cb900
+--- /dev/null
++++ b/esp32/components/muse/muse_imu.cpp
+@@ -0,0 +1,223 @@
++// QMI8658 motion input for the eyes avatar: tilt for the gaze and a left-right shake gesture. Shares the board's I2C bus.
++//
++// Adapted from zongzhu-bot (https://github.com/Liu-zhongxian/zongzhu-bot, xiaozhi-esp32/main/boards/common/zongzhu/
++// qmi8658_motion.h), MIT License, Copyright (c) 2025 Shenzhen Xinzhi Future Technology Co., Ltd. Permission is hereby granted,
++// free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to
++// deal in the Software without restriction, subject to the MIT License's conditions: this notice and the license text must
++// be included in copies or substantial portions of the Software, which is provided "AS IS", without warranty of any kind.
++
++#include <driver/i2c_master.h>
++#include <esp_log.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/task.h>
++
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <functional>
++
++#include "muse_eyes.h"
++
++/* Chip axes to screen axes (+x right, +y down) on the Waveshare ESP32-S3-Touch-AMOLED-1.75C. */
++#define QMI8658_SCREEN_X(a) (a[1])
++#define QMI8658_SCREEN_Y(a) (a[0])
++
++class Qmi8658Motion {
++public:
++    // tilt_x/tilt_y are -1..1 in screen coordinates (+x right, +y down).
++    using TiltCallback = std::function<void(float tilt_x, float tilt_y)>;
++    using ShakeCallback = std::function<void(bool active)>;
++
++    explicit Qmi8658Motion(i2c_master_bus_handle_t bus) : bus_(bus) {}
++
++    bool Start(TiltCallback on_tilt, ShakeCallback on_shake) {
++        for (uint8_t addr : {0x6B, 0x6A}) {
++            if (i2c_master_probe(bus_, addr, 50) == ESP_OK && Attach(addr))
++                break;
++        }
++        if (!dev_) {
++            ESP_LOGW(kTag, "QMI8658 not found, motion disabled");
++            return false;
++        }
++        on_tilt_ = std::move(on_tilt);
++        on_shake_ = std::move(on_shake);
++        xTaskCreate([](void* arg) { static_cast<Qmi8658Motion*>(arg)->Loop(); }, "imu_motion",
++                    3072, this, 2, nullptr);
++        return true;
++    }
++
++private:
++    static constexpr const char* kTag = "Qmi8658Motion";
++    static constexpr uint32_t kPeriodMs = 20;
++    static constexpr float kLsbPerG = 8192.0f;  // +-4g range
++
++    // Tilt
++    static constexpr float kDeadZoneG = 0.03f;
++    static constexpr float kFullTiltG = 0.30f;
++    static constexpr uint32_t kRecentreAfterMs = 3000;
++    static constexpr int kSettleSamples = 25;
++
++    // Shake: alternating left/right lobes of the high-passed X acceleration.
++    static constexpr float kLobeG = 0.55f;      // a lobe must exceed this
++    static constexpr float kLobeResetG = 0.2f;  // and fall back below this before the next
++    static constexpr uint32_t kLobeMinGapMs = 70;
++    static constexpr uint32_t kLobeMaxGapMs = 450;
++    static constexpr int kLobesToTrigger = 4;
++    static constexpr float kCalmG = 0.06f;
++    static constexpr uint32_t kCalmForMs = 700;
++
++    i2c_master_bus_handle_t bus_;
++    i2c_master_dev_handle_t dev_ = nullptr;
++    TiltCallback on_tilt_;
++    ShakeCallback on_shake_;
++
++    bool Write(uint8_t reg, uint8_t value) {
++        uint8_t buf[2] = {reg, value};
++        return i2c_master_transmit(dev_, buf, 2, 50) == ESP_OK;
++    }
++
++    bool Read(uint8_t reg, uint8_t* data, size_t len) {
++        return i2c_master_transmit_receive(dev_, &reg, 1, data, len, 50) == ESP_OK;
++    }
++
++    bool Attach(uint8_t addr) {
++        i2c_device_config_t cfg = {};
++        cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
++        cfg.device_address = addr;
++        cfg.scl_speed_hz = 400 * 1000;
++        if (i2c_master_bus_add_device(bus_, &cfg, &dev_) != ESP_OK) {
++            dev_ = nullptr;
++            return false;
++        }
++        uint8_t who = 0;
++        // CTRL1 auto-increment/little endian; CTRL2 accel +-4g 125Hz;
++        // CTRL3 gyro 512dps 125Hz; CTRL7 enable accel + gyro.
++        const bool ok = Read(0x00, &who, 1) && who == 0x05 && Write(0x02, 0x40) &&
++                        Write(0x03, 0x16) && Write(0x04, 0x56) && Write(0x08, 0x03);
++        if (!ok) {
++            ESP_LOGW(kTag, "0x%02x not usable (WHO_AM_I=0x%02x)", addr, who);
++            i2c_master_bus_rm_device(dev_);
++            dev_ = nullptr;
++            return false;
++        }
++        ESP_LOGI(kTag, "QMI8658 at 0x%02x ready", addr);
++        return true;
++    }
++
++    static float Shape(float d) {
++        const float m = std::max(0.0f, std::fabs(d) - kDeadZoneG) / kFullTiltG;
++        return std::copysign(std::min(1.0f, m), d);
++    }
++
++    void Loop() {
++        float lp_x = 0, lp_y = 0;          // smoothed gravity on screen axes
++        float slow_x = 0;                  // very slow baseline for the high-pass
++        float centre_x = 0, centre_y = 0;  // resting attitude
++        float activity = 0;
++        int settled = 0;
++        uint32_t still_since = 0;
++
++        int lobes = 0, last_sign = 0;
++        bool lobe_open = false;
++        uint32_t last_lobe = 0, calm_since = 0;
++        bool shaking = false;
++
++        while (true) {
++            vTaskDelay(pdMS_TO_TICKS(kPeriodMs));
++            uint8_t raw[6];
++            if (!Read(0x35, raw, sizeof(raw)))
++                continue;
++            float a[3];
++            for (int i = 0; i < 3; ++i)
++                a[i] = static_cast<int16_t>(raw[i * 2] | (raw[i * 2 + 1] << 8)) / kLsbPerG;
++            const float sx = QMI8658_SCREEN_X(a);
++            const float sy = QMI8658_SCREEN_Y(a);
++            const uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
++
++            if (settled == 0) {
++                lp_x = slow_x = sx;
++                lp_y = sy;
++            }
++            lp_x += (sx - lp_x) * 0.15f;
++            lp_y += (sy - lp_y) * 0.15f;
++            slow_x += (sx - slow_x) * 0.05f;
++            const float hp = sx - slow_x;
++            activity = activity * 0.9f + std::fabs(hp) * 0.1f;
++
++            if (settled < kSettleSamples) {
++                centre_x = lp_x;
++                centre_y = lp_y;
++                if (++settled == kSettleSamples)
++                    ESP_LOGI(kTag, "Motion ready, rest (%.2f, %.2f)", centre_x, centre_y);
++                continue;
++            }
++
++            // Re-centre only after the board has rested for a while (e.g. on a stand).
++            if (activity < kCalmG) {
++                if (still_since == 0)
++                    still_since = now;
++                if (now - still_since > kRecentreAfterMs) {
++                    centre_x += (lp_x - centre_x) * 0.02f;
++                    centre_y += (lp_y - centre_y) * 0.02f;
++                }
++            } else {
++                still_since = 0;
++            }
++            on_tilt_(Shape(lp_x - centre_x), Shape(lp_y - centre_y));
++
++            if (!shaking) {
++                if (lobes > 0 && now - last_lobe > kLobeMaxGapMs)
++                    lobes = 0;
++                if (lobe_open && std::fabs(hp) < kLobeResetG)
++                    lobe_open = false;
++                const int sign = hp > 0 ? 1 : -1;
++                if (!lobe_open && std::fabs(hp) > kLobeG) {
++                    lobe_open = true;
++                    const uint32_t gap = now - last_lobe;
++                    if (lobes == 0 || (sign != last_sign && gap >= kLobeMinGapMs))
++                        ++lobes;
++                    else
++                        lobes = 1;
++                    last_sign = sign;
++                    last_lobe = now;
++                    ESP_LOGI(kTag, "Shake lobe %d/%d", lobes, kLobesToTrigger);
++                }
++                if (lobes >= kLobesToTrigger) {
++                    shaking = true;
++                    lobes = 0;
++                    calm_since = 0;
++                    ESP_LOGI(kTag, "Shake: dizzy");
++                    on_shake_(true);
++                }
++            } else if (activity < kCalmG) {
++                if (calm_since == 0)
++                    calm_since = now;
++                else if (now - calm_since >= kCalmForMs) {
++                    shaking = false;
++                    ESP_LOGI(kTag, "Steady again");
++                    on_shake_(false);
++                }
++            } else {
++                calm_since = 0;
++            }
++        }
++    }
++};
++
++namespace {
++Qmi8658Motion *s_motion;
++}
++
++extern "C" bool muse_imu_start(void *i2c_master_bus_handle)
++{
++    if (s_motion || !i2c_master_bus_handle) {
++        return false;
++    }
++    s_motion = new Qmi8658Motion(static_cast<i2c_master_bus_handle_t>(i2c_master_bus_handle));
++    const bool ok = s_motion->Start([](float x, float y) { muse_eyes_tilt(x, y); }, [](bool on) { muse_eyes_dizzy(on); });
++    if (!ok) {
++        delete s_motion;
++        s_motion = nullptr;
++    }
++    return ok;
++}
 diff --git a/esp32/components/muse/muse_settings.c b/esp32/components/muse/muse_settings.c
-index 4b0dda9..5daafcd 100644
+index 4b0dda9..7534270 100644
 --- a/esp32/components/muse/muse_settings.c
 +++ b/esp32/components/muse/muse_settings.c
-@@ -34,6 +34,7 @@ static const char *TAG = "muse_settings";
+@@ -34,6 +34,8 @@ static const char *TAG = "muse_settings";
  static struct {
      uint8_t volume;
      bool speaker_on;
 +    bool pushes_on;
++    bool eyes_on;
      uint8_t mic_gain;
      uint8_t brightness;
      uint16_t sleep_s;
-@@ -118,6 +119,9 @@ esp_err_t muse_settings_init(void)
+@@ -47,6 +49,7 @@ static struct {
+ } s = {
+     .volume = CONFIG_MUSE_DEFAULT_VOLUME,
+     .speaker_on = true,
++    .eyes_on = true,
+     .mic_gain = 30,
+     .brightness = 100,
+     .sleep_s = 120,
+@@ -118,6 +121,12 @@ esp_err_t muse_settings_init(void)
      if (nvs_get_u8(s_nvs, "speaker", &b) == ESP_OK) {
          s.speaker_on = b;
      }
 +    if (nvs_get_u8(s_nvs, "pushes", &b) == ESP_OK) {
 +        s.pushes_on = b;
 +    }
++    if (nvs_get_u8(s_nvs, "eyes", &b) == ESP_OK) {
++        s.eyes_on = b;
++    }
      load_u8("mic_gain", &s.mic_gain);
      load_u8("bright", &s.brightness);
      nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
-@@ -149,6 +153,7 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
+@@ -149,6 +158,8 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
  
  int muse_settings_volume(void) { return s.volume; }
  bool muse_settings_speaker_on(void) { return s.speaker_on; }
 +bool muse_settings_pushes_on(void) { return s.pushes_on; }
++bool muse_settings_eyes_on(void) { return s.eyes_on; }
  int muse_settings_mic_gain(void) { return s.mic_gain; }
  int muse_settings_brightness(void) { return s.brightness; }
  int muse_settings_sleep_s(void) { return s.sleep_s; }
-@@ -205,6 +210,13 @@ void muse_settings_set_speaker_on(bool on)
+@@ -205,6 +216,19 @@ void muse_settings_set_speaker_on(bool on)
      notify(MUSE_SETTING_SPEAKER);
  }
  
@@ -22794,11 +23804,17 @@ index 4b0dda9..5daafcd 100644
 +    notify(MUSE_SETTING_PUSHES);
 +}
 +
++void muse_settings_set_eyes_on(bool on)
++{
++    s.eyes_on = on;
++    save_u8("eyes", on);
++}
++
  void muse_settings_set_mic_gain(int db)
  {
      s.mic_gain = clampi(db, 0, MUSE_MIC_GAIN_MAX);
 diff --git a/esp32/components/muse/muse_settings.h b/esp32/components/muse/muse_settings.h
-index 705a5cb..f67c6b8 100644
+index 705a5cb..119d3ae 100644
 --- a/esp32/components/muse/muse_settings.h
 +++ b/esp32/components/muse/muse_settings.h
 @@ -45,6 +45,7 @@ typedef enum {
@@ -22809,27 +23825,29 @@ index 705a5cb..f67c6b8 100644
  } muse_setting_t;
  
  typedef void (*muse_setting_cb_t)(muse_setting_t what);
-@@ -54,6 +55,7 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
+@@ -54,6 +55,8 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
  
  int muse_settings_volume(void);         /* 0..100 */
  bool muse_settings_speaker_on(void);    /* off: replies are shown, not played */
 +bool muse_settings_pushes_on(void);     /* on: messages Muse sends unasked are shown and played */
++bool muse_settings_eyes_on(void);       /* on: the eyes avatar instead of the pixel avatar */
  int muse_settings_mic_gain(void);       /* dB, 0..MUSE_MIC_GAIN_MAX */
  int muse_settings_brightness(void);     /* 10..100 */
  int muse_settings_sleep_s(void);        /* 0 = never */
-@@ -68,6 +70,7 @@ size_t muse_settings_hatch_token_len(void);
+@@ -68,6 +71,8 @@ size_t muse_settings_hatch_token_len(void);
  
  void muse_settings_set_volume(int pct);
  void muse_settings_set_speaker_on(bool on);
 +void muse_settings_set_pushes_on(bool on);
++void muse_settings_set_eyes_on(bool on);
  void muse_settings_set_mic_gain(int db);
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..cf5e290 100644
+index 6a372ac..8471459 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
-@@ -1020,6 +1020,13 @@ static void on_speaker_sw(lv_event_t *e)
+@@ -1020,6 +1020,19 @@ static void on_speaker_sw(lv_event_t *e)
      muse_settings_set_speaker_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
  }
  
@@ -22840,22 +23858,45 @@ index 6a372ac..cf5e290 100644
 +    muse_settings_set_pushes_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 +}
 +
++/* On: two eyes that blink, follow a finger and tilt with the board; off: the pixel avatar. */
++static void on_eyes_sw(lv_event_t *e)
++{
++    muse_settings_set_eyes_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
++}
++
  static void on_volume(lv_event_t *e)
  {
      int v = lv_slider_get_value(s_vol_sl);
-@@ -1059,6 +1066,7 @@ static void build_sound_page(lv_obj_t *tile)
+@@ -1059,6 +1072,8 @@ static void build_sound_page(lv_obj_t *tile)
      lv_obj_t *list;
      s_sound = page(tile, "SOUND", true, &list);
      s_spk_sw = switch_row(list, "Speaker", muse_settings_speaker_on(), on_speaker_sw);
 +    switch_row(list, "All messages", muse_settings_pushes_on(), on_pushes_sw);
++    switch_row(list, "Eyes", muse_settings_eyes_on(), on_eyes_sw);
      s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
 diff --git a/esp32/components/muse/muse_ui.c b/esp32/components/muse/muse_ui.c
-index d0d4e2f..4c76a73 100644
+index d0d4e2f..e67a142 100644
 --- a/esp32/components/muse/muse_ui.c
 +++ b/esp32/components/muse/muse_ui.c
-@@ -149,6 +149,18 @@ static SemaphoreHandle_t s_image_mutex;
+@@ -32,6 +32,7 @@
+ #include "src/misc/lv_area_private.h"            /* lv_area_intersect, for the ring */
+ 
+ #include "muse_ble.h"
++#include "muse_eyes.h"
+ #include "muse_board.h"
+ #include "muse_input.h"
+ #include "muse_chat.h"
+@@ -118,6 +119,7 @@ static lv_obj_t *s_pair_code;
+ static lv_obj_t *s_pair_title;
+ static lv_obj_t *s_pair_hint;
+ static lv_obj_t *s_canvas;
++static lv_obj_t *s_status;      /* the top row of status icons */
+ static lv_obj_t *s_mic_icon;
+ static lv_obj_t *s_ptt_hint, *s_spk_hint, *s_pwr_hint;
+ #if LV_USE_SNAPSHOT
+@@ -149,6 +151,18 @@ static SemaphoreHandle_t s_image_mutex;
  static uint16_t *s_image_buf;
  static lv_area_t s_image_area;
  static bool s_image_dirty;
@@ -22874,7 +23915,7 @@ index d0d4e2f..4c76a73 100644
  static bool s_ready;
  
  static float s_level;
-@@ -394,6 +406,20 @@ static void invalidate_muse(void)
+@@ -394,6 +408,20 @@ static void invalidate_muse(void)
  
  static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color);
  
@@ -22895,7 +23936,107 @@ index d0d4e2f..4c76a73 100644
  /* A microphone from primitives: LVGL's symbol font has none. */
  static lv_obj_t *make_mic(lv_obj_t *parent, int size)
  {
-@@ -518,7 +544,7 @@ static const lv_font_t *caption_font(void)
+@@ -491,12 +519,99 @@ static void build_button_icons(lv_obj_t *face)
+     lv_obj_align(s_aux_icon, a->align, a->x, a->y);
+ }
+ 
++static void chrome_touch(void);
++
+ static void on_canvas_clicked(lv_event_t *e)
+ {
+     (void)e;
++    chrome_touch();
+     muse_state_make_happy();
+ }
+ 
++/* A touch on the eyes keeps Muse awake, like any other, and brings the controls up. */
++static void on_eyes_touch(void)
++{
++    muse_state_poke();
++    chrome_touch();
++}
++
++/* A touch anywhere else on the face. */
++static void on_face_pressed(lv_event_t *e)
++{
++    (void)e;
++    chrome_touch();
++}
++
++/*
++ * The face is kept clean: the status icons, the button hints and the speaker button are only drawn for a few seconds after
++ * a touch. While they're out they can't be pressed either, so a first touch reveals them and the next one uses them.
++ */
++#define CHROME_SHOW_MS 4000
++static uint32_t s_chrome_until;
++static bool s_chrome_on = true;   /* until chrome_init() puts them away */
++
++static void chrome_apply(bool on)
++{
++    lv_obj_t *const objs[] = { s_status, s_state_lbl, s_speaker, s_mic_icon, s_aux_icon, s_ptt_hint, s_spk_hint, s_pwr_hint };
++    for (size_t i = 0; i < sizeof(objs) / sizeof(objs[0]); i++) {
++        if (!objs[i]) {
++            continue;
++        }
++        if (on) {
++            lv_obj_fade_in(objs[i], 150, 0);
++        } else {
++            lv_obj_fade_out(objs[i], 400, 0);
++        }
++    }
++    if (s_speaker) {
++        lv_obj_set_flag(s_speaker, LV_OBJ_FLAG_CLICKABLE, on);
++    }
++    s_chrome_on = on;
++}
++
++static void chrome_touch(void)
++{
++    s_chrome_until = lv_tick_get() + CHROME_SHOW_MS;
++    if (!s_chrome_on) {
++        chrome_apply(true);
++    }
++}
++
++static void chrome_init(void)
++{
++    lv_obj_t *const objs[] = { s_status, s_state_lbl, s_speaker, s_mic_icon, s_aux_icon, s_ptt_hint, s_spk_hint, s_pwr_hint };
++    for (size_t i = 0; i < sizeof(objs) / sizeof(objs[0]); i++) {
++        if (objs[i]) {
++            lv_obj_set_style_opa(objs[i], LV_OPA_TRANSP, 0);
++        }
++    }
++    if (s_speaker) {
++        lv_obj_remove_flag(s_speaker, LV_OBJ_FLAG_CLICKABLE);
++    }
++    s_chrome_on = false;
++    if (s_face) {
++        lv_obj_add_event_cb(s_face, on_face_pressed, LV_EVENT_PRESSED, NULL);
++    }
++}
++
++static void chrome_tick(void)
++{
++    if (s_chrome_on && (int32_t)(lv_tick_get() - s_chrome_until) >= 0) {
++        chrome_apply(false);
++    }
++}
++
++/* Shows the eyes or the pixel avatar, whichever Settings > Sound > Eyes says. */
++static void sync_avatar(void)
++{
++    bool eyes = muse_settings_eyes_on();
++    if (eyes == muse_eyes_visible()) {
++        return;
++    }
++    lv_obj_set_flag(s_canvas, LV_OBJ_FLAG_HIDDEN, eyes);
++    muse_eyes_show(eyes);
++}
++
+ static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compact)
+ {
+     return s_small ? compact : full;
+@@ -518,7 +633,7 @@ static const lv_font_t *caption_font(void)
      }
      return &font;
  #else
@@ -22904,7 +24045,42 @@ index d0d4e2f..4c76a73 100644
  #endif
  }
  
-@@ -1023,6 +1049,11 @@ static void on_cover_event(lv_event_t *e)
+@@ -565,6 +680,7 @@ static void on_speaker_event(lv_event_t *e)
+     bool idle = muse_state_mode(NULL) == MUSE_MODE_IDLE;   /* don't cover a reply's captions */
+     switch (lv_event_get_code(e)) {
+     case LV_EVENT_PRESSED:
++        chrome_touch();
+         speaker_grow(true);
+         break;
+     case LV_EVENT_LONG_PRESSED:
+@@ -627,6 +743,7 @@ static void move_muse_t(void *obj, int32_t t)
+     set_canvas_px(s_from_px + (s_to_px - s_from_px) * t / 256);
+     s_muse_y = s_from_y + (s_to_y - s_from_y) * t / 256;
+     lv_obj_align(s_canvas, LV_ALIGN_CENTER, 0, s_muse_y);
++    muse_eyes_place(s_muse_y, (int)s_muse_src.header.w, s_canvas_px);   /* the eyes follow the pixel avatar */
+ }
+ 
+ /* Eases Muse to `px` centred at `y`, from wherever it is now. */
+@@ -915,6 +1032,10 @@ static void build_screen(void)
+     s_muse_y = s_big_y;
+     lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_CLICKABLE);
+     lv_obj_add_event_cb(s_canvas, on_canvas_clicked, LV_EVENT_CLICKED, NULL);
++    /* The eyes: an alternative avatar in the same place (Settings > Sound > Eyes), shown instead of the pixel one. */
++    muse_eyes_build(face, s_w);
++    muse_eyes_set_touch_cb(on_eyes_touch);
++    muse_eyes_place(s_big_y, s_canvas_px, s_canvas_px);
+     if (s_ring) {
+         /* The canvas's black corners reach the bezel; keep the ring on top. */
+         lv_obj_move_foreground(s_ring);
+@@ -923,6 +1044,7 @@ static void build_screen(void)
+ 
+     /* Status line: connectivity icons + power. */
+     lv_obj_t *status = lv_obj_create(face);
++    s_status = status;
+     lv_obj_remove_style_all(status);
+     lv_obj_remove_flag(status, LV_OBJ_FLAG_SCROLLABLE);
+     lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+@@ -1023,6 +1145,11 @@ static void on_cover_event(lv_event_t *e)
  static void image_hide_locked(void)
  {
      xSemaphoreTake(s_image_mutex, portMAX_DELAY);
@@ -22916,7 +24092,7 @@ index d0d4e2f..4c76a73 100644
      if (s_image_buf) {
          lv_obj_add_flag(s_image, LV_OBJ_FLAG_HIDDEN);
          lv_image_set_src(s_image, NULL);
-@@ -1058,6 +1089,61 @@ static void image_sync(void)
+@@ -1058,6 +1185,61 @@ static void image_sync(void)
      xSemaphoreGive(s_image_mutex);
  }
  
@@ -22978,7 +24154,7 @@ index d0d4e2f..4c76a73 100644
  static void on_image_clicked(lv_event_t *e)
  {
      (void)e;
-@@ -1148,6 +1234,38 @@ static void build_overlays(void)
+@@ -1148,6 +1330,38 @@ static void build_overlays(void)
      lv_obj_set_pos(s_image, 0, 0);
      lv_obj_add_flag(s_image, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
      lv_obj_add_event_cb(s_image, on_image_clicked, LV_EVENT_CLICKED, NULL);
@@ -23017,7 +24193,7 @@ index d0d4e2f..4c76a73 100644
  #if CONFIG_MUSE_WATCHER_CAMERA
      s_camera_hint = lv_btn_create(scr);
      lv_obj_set_size(s_camera_hint, 244, 46);
-@@ -1612,6 +1730,7 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1612,6 +1826,7 @@ static void frame_tick(lv_timer_t *timer)
      }
      (void)timer;
      image_sync();
@@ -23025,7 +24201,12 @@ index d0d4e2f..4c76a73 100644
      float mode_t;
      muse_mode_t mode = muse_state_mode(&mode_t);
      float now = (float)esp_timer_get_time() / 1e6f;
-@@ -1631,8 +1750,9 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1627,12 +1842,14 @@ static void frame_tick(lv_timer_t *timer)
+         return;
+     }
+     update_chrome(now);
++    chrome_tick();
+     if (muse_menu_tick(now)) {
          image_hide_locked();
          return;   /* the menu covers the face */
      }
@@ -23037,7 +24218,45 @@ index d0d4e2f..4c76a73 100644
      }
      if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
          /* Off screen, or sliding to or from settings: hold still so the
-@@ -1784,6 +1904,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
+@@ -1644,15 +1861,20 @@ static void frame_tick(lv_timer_t *timer)
+     float level = muse_state_level();
+     s_level += (level - s_level) * (level > s_level ? 0.6f : 0.2f);
+ 
+-    muse_pose_t pose = {
+-        .mode = mode,
+-        .t = now,
+-        .mode_t = mode_t,
+-        .level = s_level,
+-        .happy = muse_state_happiness(),
+-    };
+-    muse_pixel_render(&pose);
+-    invalidate_muse();
++    sync_avatar();
++    if (muse_eyes_visible()) {
++        muse_eyes_tick(mode, s_level, muse_state_happiness());
++    } else {
++        muse_pose_t pose = {
++            .mode = mode,
++            .t = now,
++            .mode_t = mode_t,
++            .level = s_level,
++            .happy = muse_state_happiness(),
++        };
++        muse_pixel_render(&pose);
++        invalidate_muse();
++    }
+ 
+     update_status(mode, now);
+ }
+@@ -1704,6 +1926,7 @@ esp_err_t muse_ui_start(void)
+         muse_menu_build(lv_screen_active(), s_w, s_h);
+     }
+     build_overlays();
++    chrome_init();
+     lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
+     s_ready = true;
+     muse_board->display_unlock();
+@@ -1784,6 +2007,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
      return true;
  }
  
@@ -23274,10 +24493,18 @@ index 7a3ae28..74cf59a 100644
  void muse_voice_request_chirp(void);
  
 diff --git a/esp32/main/app.c b/esp32/main/app.c
-index b7f076d..fbed646 100644
+index b7f076d..357cedf 100644
 --- a/esp32/main/app.c
 +++ b/esp32/main/app.c
-@@ -81,6 +81,8 @@
+@@ -24,6 +24,7 @@
+ #include <stdatomic.h>
+ 
+ #include "esp_log.h"
++#include "esp_wifi.h"
+ #include "freertos/FreeRTOS.h"
+ #include "freertos/task.h"
+ #include "freertos/semphr.h"
+@@ -81,6 +82,8 @@
  #endif
  #if CONFIG_MUSE_ENABLED
  #include "muse_glue.h"
@@ -23286,7 +24513,31 @@ index b7f076d..fbed646 100644
  #include "muse_input.h"
  // Muse joins Wi-Fi from its own settings, before or without pairing.
  #define WIFI_WITHOUT_PAIRING 1
-@@ -1903,7 +1905,29 @@ static cJSON *on_ws_command(
+@@ -333,6 +336,23 @@ static void note_vm_credentials_accepted(void) {
+     }
+ }
+ 
++// Local addition: with CONFIG_MUSE_HOME_SSID set, being joined to any other Wi-Fi network means away from home, where
++// Muse is usually out of reach: the background attempts to reach it (VM session, token refresh, session reconnects)
++// only fail slowly and take radio time from the turn that is running, so they wait until the home network is back.
++#ifndef CONFIG_MUSE_HOME_SSID
++#define CONFIG_MUSE_HOME_SSID ""
++#endif
++bool app_away_from_home(void) {
++    if (!CONFIG_MUSE_HOME_SSID[0]) {
++        return false;
++    }
++    wifi_ap_record_t ap;
++    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
++        return false;   // not joined: there is nothing to decide yet
++    }
++    return strcmp((const char *)ap.ssid, CONFIG_MUSE_HOME_SSID) != 0;
++}
++
+ static bool operation_gate_take(TickType_t wait_ticks, const char *operation) {
+     if (s_operation_gate
+         && xSemaphoreTake(s_operation_gate, wait_ticks) == pdTRUE) {
+@@ -1903,7 +1923,29 @@ static cJSON *on_ws_command(
          cJSON_AddBoolToObject(async, "_async", true);
          return async;
      }
@@ -23316,11 +24567,48 @@ index b7f076d..fbed646 100644
          led_status_show_animation();
          cJSON *result = cJSON_CreateObject();
          cJSON_AddBoolToObject(result, "ok", true);
+@@ -2259,7 +2301,7 @@ bool app_wifi_forget(const char *ssid) {
+ static void muse_keep_vm_session(void) {
+     static int64_t next_try;
+     static int64_t backoff = MUSE_VM_RETRY_MIN_US;
+-    if (!wifi_mgr_is_connected() || !config_is_provisioned() || noise_ctrl_is_running()) {
++    if (!wifi_mgr_is_connected() || !config_is_provisioned() || noise_ctrl_is_running() || app_away_from_home()) {
+         next_try = 0;
+         backoff = MUSE_VM_RETRY_MIN_US;
+         return;
+@@ -2884,7 +2926,7 @@ void app_run(void) {
+         // nothing has rejected the token, so the refresh endpoint is contacted
+         // only once CONFIG_HOMEHUB_TOKEN_REFRESH_INTERVAL_DAYS of uptime have
+         // elapsed — but this poll is what makes that interval fire at all.
+-        if (wifi_mgr_is_connected() && config_is_provisioned()
++        if (wifi_mgr_is_connected() && config_is_provisioned() && !app_away_from_home()
+             && operation_gate_take(0, "device token maintenance")) {
+             ensure_access_token_ready_with_gate_held(false, true);
+             operation_gate_give();
+diff --git a/esp32/main/app.h b/esp32/main/app.h
+index 70a8635..8511877 100644
+--- a/esp32/main/app.h
++++ b/esp32/main/app.h
+@@ -66,3 +66,6 @@ void app_reset_setup_async(void);
+ bool app_hatch_vm_credentials(const char *want_vm, char *vm_id, size_t id_cap,
+                               char *vm_name, size_t name_cap, char **vm_token);
+ #endif
++// True when joined to a Wi-Fi network other than CONFIG_MUSE_HOME_SSID (false when none is configured). Away from home
++// the background attempts to reach Muse wait.
++bool app_away_from_home(void);
 diff --git a/esp32/main/noise_control.cpp b/esp32/main/noise_control.cpp
-index 465c904..628346f 100644
+index 465c904..84a87df 100644
 --- a/esp32/main/noise_control.cpp
 +++ b/esp32/main/noise_control.cpp
-@@ -1456,6 +1456,39 @@ static char *build_register_json(void) {
+@@ -60,6 +60,7 @@ extern "C" {
+ using namespace musegadgets::noise::core;
+ 
+ static const char *TAG = "link.noise_ctrl";
++extern "C" bool app_away_from_home(void);
+ 
+ #define NOISE_DEFAULT_HOST "hatch.metaaivm.com"
+ static char s_noise_host[256] = NOISE_DEFAULT_HOST;
+@@ -1456,6 +1457,39 @@ static char *build_register_json(void) {
      }
  #endif
  
@@ -23360,3 +24648,14 @@ index 465c904..628346f 100644
  #if CONFIG_HOMEHUB_VOICE
      cJSON *volume_optional = cJSON_CreateObject();
      cJSON *volume_param = cJSON_CreateObject();
+@@ -2411,6 +2445,10 @@ static void noise_ctrl_task(void *arg) {
+             vTaskDelay(pdMS_TO_TICKS(500));
+             continue;
+         }
++        if (app_away_from_home()) {   // Muse is usually out of reach away from home: wait for the home network
++            vTaskDelay(pdMS_TO_TICKS(5000));
++            continue;
++        }
+         uint64_t t0 = esp_timer_get_time();
+         session_result_t result = run_session(&stack);
+         uint64_t up_ms = (esp_timer_get_time() - t0) / 1000;
