@@ -188,7 +188,7 @@ async function chat(req, env, all, ctx) {
   // only when the bot's name is said first. If the bot cannot be reached the normal model answers.
   const asked = away ? userText : botAsked(userText);
   if (asked && env.GROKBOT_URL && env.GROKBOT_AUTH) {
-    const r = await botChat(req, env, asked);
+    const r = await botChat(req, env, asked, all);
     if (r) return r;
   }
   const { cfg, S } = all;
@@ -233,7 +233,7 @@ async function realIp(host) {
   } catch (e) { return ""; }
 }
 
-async function botChat(req, env, ask) {
+async function botChat(req, env, ask, all) {
   const id = hex(8), tok = hex(16);
   await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
   const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
@@ -248,29 +248,41 @@ async function botChat(req, env, ask) {
   };
   const send = async (url, origin) => fetch(url, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message: await messageFor(origin) }), signal: AbortSignal.timeout(20000) });
   const direct = env.BOT_CALLBACK_FALLBACK || env.BOT_CALLBACK_BASE || new URL(req.url).origin;
-  let sent = null;
-  if (env.GROKBOT_VIA) {
-    try {
-      const u = new URL(env.GROKBOT_URL);
-      const r = await send(new URL(u.pathname + u.search, env.GROKBOT_VIA).toString(), env.BOT_CALLBACK_BASE || direct);
-      console.log("bot webhook via relay", r.status);
-      if (r.ok) sent = r; else if (r.status < 500) return null;   // the bot said no: not a relay problem
-    } catch (e) { console.log("bot relay failed", String(e).slice(0, 100)); }
-  }
-  if (!sent) {
+  // Sends the Webhook (through the relay when there is one, straight when it is down). True when the bot took it.
+  const sendWebhook = async () => {
+    if (env.GROKBOT_VIA) {
+      try {
+        const u = new URL(env.GROKBOT_URL);
+        const r = await send(new URL(u.pathname + u.search, env.GROKBOT_VIA).toString(), env.BOT_CALLBACK_BASE || direct);
+        console.log("bot webhook via relay", r.status);
+        if (r.ok) return true;
+        if (r.status < 500) return false;   // the bot said no: not a relay problem
+      } catch (e) { console.log("bot relay failed", String(e).slice(0, 100)); }
+    }
     try {
       const r = await send(env.GROKBOT_URL, direct);
       console.log("bot webhook", r.status);
-      if (!r.ok) return null;           // the normal model answers instead
-    } catch (e) { console.log("bot webhook failed", String(e).slice(0, 120)); return null; }
-  }
+      return r.ok;
+    } catch (e) { console.log("bot webhook failed", String(e).slice(0, 120)); return false; }
+  };
   const enc = new TextEncoder();
   const body = new ReadableStream({
     async start(ctl) {
       const say = (t) => ctl.enqueue(enc.encode(t));
-      // The firmware reads the stream 200 bytes at a time and its HTTP client waits until a read is full, so a short
-      // acknowledgement followed by a long silence would sit unspoken until the answer arrives: pad it (spaces are skipped).
-      say("收到，我去问小黑，请稍等。" + " ".repeat(220));
+      // The acknowledgement goes out before the Webhook, so it is heard at once even when the Webhook is slow.
+      say("收到，我去问小黑，请稍等。");
+      if (!(await sendWebhook())) {
+        // The bot could not be reached: the normal model answers after the acknowledgement, in the same reply.
+        try {
+          const { cfg, S } = all;
+          const r = await llmStream(cfg, S, [{ role: "system", content: sysPrompt(cfg) }, { role: "user", content: ask }]);
+          const rd = r.stream.getReader();
+          say("\n");
+          for (;;) { const { done, value } = await rd.read(); if (done) break; ctl.enqueue(value); }
+        } catch (e) { say("\n没能联系上小黑。"); }
+        ctl.close();
+        return;
+      }
       const until = Date.now() + BOT_WAIT_MS;
       while (Date.now() < until) {
         await new Promise((r) => setTimeout(r, 1500));
