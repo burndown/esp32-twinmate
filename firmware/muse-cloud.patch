@@ -248,7 +248,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..90303c2 100644
+index 2866f5d..c445e30 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -343,7 +343,7 @@ index 2866f5d..90303c2 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1026,503 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1026,504 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -506,7 +506,8 @@ index 2866f5d..90303c2 100644
 +    case 1: urls[0] = CONFIG_MUSE_BRAIN_FALLBACK_URL; break;
 +    default: if (CONFIG_MUSE_BRAIN_FALLBACK_URL[0]) urls[1] = CONFIG_MUSE_BRAIN_FALLBACK_URL;
 +    }
-+    for (int u = 0; u < 2 && urls[u] && !got && json; u++) {
++    bool answered = false;   /* the server sent an HTTP status (even 503: "ask Muse"): that is its answer, not a failure to reach it */
++    for (int u = 0; u < 2 && urls[u] && !got && !answered && json; u++) {
 +    esp_http_client_config_t cfg = {};
 +    cfg.url = urls[u];
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
@@ -518,7 +519,7 @@ index 2866f5d..90303c2 100644
 +        esp_http_client_set_header(h, "X-Device", "muse-gadget");
 +        if (esp_http_client_open(h, strlen(json)) == ESP_OK &&
 +            esp_http_client_write(h, json, strlen(json)) == (int)strlen(json) &&
-+            esp_http_client_fetch_headers(h) >= 0 && esp_http_client_get_status_code(h) == 200) {
++            esp_http_client_fetch_headers(h) >= 0 && (answered = true) && esp_http_client_get_status_code(h) == 200) {
 +            ok = true;
 +            /* One byte per read: esp_http_client_read() waits until its buffer is full, so a short piece of text followed
 +             * by a long silence (an acknowledgement, then a cloud bot thinking for half a minute) would sit unread. */
@@ -849,7 +850,7 @@ index 2866f5d..90303c2 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1724,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1725,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -885,7 +886,7 @@ index 2866f5d..90303c2 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1944,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +1945,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -943,7 +944,7 @@ index 2866f5d..90303c2 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2008,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2009,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -967,7 +968,7 @@ index 2866f5d..90303c2 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2097,246 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2098,247 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1004,7 +1005,8 @@ index 2866f5d..90303c2 100644
 +    case 1: urls[0] = CONFIG_MUSE_TTS_FALLBACK_URL; break;
 +    default: if (CONFIG_MUSE_TTS_FALLBACK_URL[0]) urls[1] = CONFIG_MUSE_TTS_FALLBACK_URL;
 +    }
-+    for (int u = 0; u < 2 && urls[u] && !ok && json; u++) {
++    bool answered = false;   /* an HTTP status came back: the server was reached, so the fallback would not do better */
++    for (int u = 0; u < 2 && urls[u] && !ok && !answered && json; u++) {
 +    esp_http_client_config_t cfg = {};
 +    cfg.url = urls[u];
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
@@ -1015,7 +1017,7 @@ index 2866f5d..90303c2 100644
 +        esp_http_client_set_header(h, "Content-Type", "application/json");
 +        if (esp_http_client_open(h, strlen(json)) == ESP_OK &&
 +            esp_http_client_write(h, json, strlen(json)) == (int)strlen(json) &&
-+            esp_http_client_fetch_headers(h) >= 0 && esp_http_client_get_status_code(h) == 200) {
++            esp_http_client_fetch_headers(h) >= 0 && (answered = true) && esp_http_client_get_status_code(h) == 200) {
 +            size_t n = 0;
 +            for (;;) {
 +                int r = esp_http_client_read(h, (char *)s_fetch.buf + n, TTS_FETCH_MAX - n);
@@ -1231,7 +1233,7 @@ index 2866f5d..90303c2 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2396,39 @@ static void decode(void)
+@@ -1598,6 +2398,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1271,7 +1273,7 @@ index 2866f5d..90303c2 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2508,9 @@ static void check_turn(void)
+@@ -1677,6 +2510,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1281,7 +1283,7 @@ index 2866f5d..90303c2 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2719,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2721,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1310,7 +1312,7 @@ index 2866f5d..90303c2 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2792,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2794,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1323,7 +1325,7 @@ index 2866f5d..90303c2 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2811,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2813,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1333,7 +1335,7 @@ index 2866f5d..90303c2 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2820,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2822,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1362,7 +1364,7 @@ index 2866f5d..90303c2 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2864,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2866,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1371,7 +1373,7 @@ index 2866f5d..90303c2 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2882,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2884,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1381,7 +1383,7 @@ index 2866f5d..90303c2 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +2990,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +2992,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1398,7 +1400,7 @@ index 2866f5d..90303c2 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3032,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3034,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
@@ -23877,7 +23879,7 @@ index 6a372ac..8471459 100644
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
 diff --git a/esp32/components/muse/muse_ui.c b/esp32/components/muse/muse_ui.c
-index d0d4e2f..e67a142 100644
+index d0d4e2f..67560ed 100644
 --- a/esp32/components/muse/muse_ui.c
 +++ b/esp32/components/muse/muse_ui.c
 @@ -32,6 +32,7 @@
@@ -24193,7 +24195,36 @@ index d0d4e2f..e67a142 100644
  #if CONFIG_MUSE_WATCHER_CAMERA
      s_camera_hint = lv_btn_create(scr);
      lv_obj_set_size(s_camera_hint, 244, 46);
-@@ -1612,6 +1826,7 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1465,14 +1679,16 @@ static void update_status(muse_mode_t mode, float now)
+         s_shown_lit = -1;
+     }
+ 
+-    /* Ring: phase progress while listening/speaking, a spinner while thinking. */
++    /* Ring: phase progress while listening/speaking; while thinking the time since the question was asked (the voice task
++     * sets the progress), or a spinner when it is not being timed. */
++    const bool timed = mode == MUSE_MODE_THINKING && muse_state_progress() > 0.001f;
+     int ring = 0;
+-    if (mode == MUSE_MODE_LISTENING || mode == MUSE_MODE_SPEAKING) {
++    if (mode == MUSE_MODE_LISTENING || mode == MUSE_MODE_SPEAKING || timed) {
+         ring = (int)(muse_state_progress() * RING_RANGE);
+     } else if (mode == MUSE_MODE_THINKING) {
+         ring = RING_RANGE / 6;
+     }
+-    if (s_ring && mode == MUSE_MODE_THINKING) {
++    if (s_ring && mode == MUSE_MODE_THINKING && !timed) {
+         /* Move the indicator rather than rotate the arc: a rotation redraws
+          * the whole ring, and with it the whole screen. */
+         int start = (int)(now * 300.0f) % 360;
+@@ -1488,7 +1704,7 @@ static void update_status(muse_mode_t mode, float now)
+         }
+     } else {
+         /* Bar along the bottom edge; a sliding segment while thinking. */
+-        int x = mode == MUSE_MODE_THINKING ? (int)(now * s_w) % s_w : 0;
++        int x = mode == MUSE_MODE_THINKING && !timed ? (int)(now * s_w) % s_w : 0;
+         int w = ring * s_w / RING_RANGE;
+         if (ring != s_ring_value || x) {
+             lv_obj_set_width(s_bar, w);
+@@ -1612,6 +1828,7 @@ static void frame_tick(lv_timer_t *timer)
      }
      (void)timer;
      image_sync();
@@ -24201,7 +24232,7 @@ index d0d4e2f..e67a142 100644
      float mode_t;
      muse_mode_t mode = muse_state_mode(&mode_t);
      float now = (float)esp_timer_get_time() / 1e6f;
-@@ -1627,12 +1842,14 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1627,12 +1844,14 @@ static void frame_tick(lv_timer_t *timer)
          return;
      }
      update_chrome(now);
@@ -24218,7 +24249,7 @@ index d0d4e2f..e67a142 100644
      }
      if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
          /* Off screen, or sliding to or from settings: hold still so the
-@@ -1644,15 +1861,20 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1644,15 +1863,20 @@ static void frame_tick(lv_timer_t *timer)
      float level = muse_state_level();
      s_level += (level - s_level) * (level > s_level ? 0.6f : 0.2f);
  
@@ -24248,7 +24279,7 @@ index d0d4e2f..e67a142 100644
  
      update_status(mode, now);
  }
-@@ -1704,6 +1926,7 @@ esp_err_t muse_ui_start(void)
+@@ -1704,6 +1928,7 @@ esp_err_t muse_ui_start(void)
          muse_menu_build(lv_screen_active(), s_w, s_h);
      }
      build_overlays();
@@ -24256,7 +24287,7 @@ index d0d4e2f..e67a142 100644
      lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
      s_ready = true;
      muse_board->display_unlock();
-@@ -1784,6 +2007,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
+@@ -1784,6 +2009,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
      return true;
  }
  
@@ -24309,7 +24340,7 @@ index 422cb2e..e84ad33 100644
  void muse_ui_camera_hint(bool visible);
  
 diff --git a/esp32/components/muse/muse_voice.c b/esp32/components/muse/muse_voice.c
-index 38c7c9d..6db9727 100644
+index 38c7c9d..6c85b6c 100644
 --- a/esp32/components/muse/muse_voice.c
 +++ b/esp32/components/muse/muse_voice.c
 @@ -36,6 +36,7 @@
@@ -24330,13 +24361,16 @@ index 38c7c9d..6db9727 100644
  static volatile bool s_loopback;
  static volatile bool s_mp3test;
  
-@@ -343,17 +347,19 @@ static void go_idle(const char *caption);
+@@ -343,17 +347,24 @@ static void go_idle(const char *caption);
  /*
   * Plays Hatch's reply as it arrives, with its text as the caption. Returns
   * true if interrupted by a new press. *delivered: the VM has the note.
 + * `waiting` is the caption until there's a transcript or reply.
   */
 -static bool hatch_reply(bool *delivered)
++#define WAIT_RING_S 60.0f                 /* the ring fills over this many seconds of waiting for a reply */
++#define WAIT_RING_QUIET_US 1500000LL      /* silence this long after speech counts as waiting again */
++
 +static bool hatch_reply_as(bool *delivered, const char *waiting)
  {
      muse_state_set_mode(MUSE_MODE_THINKING);
@@ -24347,13 +24381,27 @@ index 38c7c9d..6db9727 100644
      char text[96];
      static char page[MUSE_CAPTION_MAX];
      bool done = false, speaking = false, replied = false;
++    bool waiting_ui = false;     /* speaking was shown, but nothing is playing: the reply is still being written */
++    int64_t last_audio_us = 0;
      size_t played = 0;
 +    int dbg_peak = 0, dbg_wfail = 0;   /* DIAG: reply peak and failed speaker writes */
      int64_t t0 = esp_timer_get_time();
      *delivered = false;
      for (;;) {
-@@ -405,8 +411,12 @@ static bool hatch_reply(bool *delivered)
+@@ -399,27 +410,50 @@ static bool hatch_reply(bool *delivered)
+         }
+         size_t n = muse_hatch_turn_read(buf, MUSE_AUDIO_CHUNK, speaking || done ? 0 : 20);
+         if (n) {
++            last_audio_us = esp_timer_get_time();
+             if (!speaking) {
+                 speaking = true;
+                 muse_state_set_mode(MUSE_MODE_SPEAKING);
++                muse_state_set_progress(0);
                  ESP_LOGI(TAG, "reply audio after %.2fs", (esp_timer_get_time() - t0) / 1e6);
++            } else if (waiting_ui) {
++                waiting_ui = false;   /* the answer is coming */
++                muse_state_set_mode(MUSE_MODE_SPEAKING);
++                muse_state_set_progress(0);
              }
              muse_state_set_level(muse_audio_level(buf, n));
 -            muse_audio_write(buf, n);
@@ -24366,7 +24414,21 @@ index 38c7c9d..6db9727 100644
          } else if (done) {
              break;
          } else if (speaking) {
-@@ -419,7 +429,11 @@ static bool hatch_reply(bool *delivered)
+             /* Between messages: keep the speaker fed so it doesn't replay stale DMA. */
+             muse_state_set_level(0);
+             muse_audio_write(silence, MUSE_AUDIO_CHUNK);
++            if (!waiting_ui && esp_timer_get_time() - last_audio_us > WAIT_RING_QUIET_US) {
++                waiting_ui = true;   /* an acknowledgement was spoken and the answer is not here yet: back to thinking */
++                muse_state_set_mode(MUSE_MODE_THINKING);
++            }
++        }
++        if (!done && (!speaking || waiting_ui)) {
++            /* The ring counts the time since the question was asked. */
++            float p = (float)(esp_timer_get_time() - t0) / (WAIT_RING_S * 1e6f);
++            muse_state_set_progress(p < 0.01f ? 0.01f : p > 1.0f ? 1.0f : p);
+         }
+         /* The page being said, or before the speech the reply's opening page. */
+         if ((speaking || replied) && muse_hatch_turn_caption(played, page, sizeof(page))) {
              muse_state_set_caption("%s", page);
          }
      }
@@ -24378,7 +24440,7 @@ index 38c7c9d..6db9727 100644
      ESP_LOGI(TAG, "muse reply: %.2fs of audio, %.2fs total", (double)played / MUSE_AUDIO_RATE,
               (esp_timer_get_time() - t0) / 1e6);
      if (!played) {
-@@ -429,6 +443,23 @@ static bool hatch_reply(bool *delivered)
+@@ -429,6 +463,23 @@ static bool hatch_reply(bool *delivered)
      return false;
  }
  
@@ -24402,7 +24464,7 @@ index 38c7c9d..6db9727 100644
  static void go_idle(const char *caption)
  {
      muse_state_set_progress(0);
-@@ -796,7 +827,7 @@ static void voice_task(void *arg)
+@@ -796,7 +847,7 @@ static void voice_task(void *arg)
              muse_input_event_t ev;
              bool asleep = muse_state_asleep();
              bool battery = muse_state_on_battery();
@@ -24411,7 +24473,7 @@ index 38c7c9d..6db9727 100644
  #if HOLD_NOTES
              /* A press goes first: send_held() leaves it queued and returns
               * without backing off, so retrying before it's read would spin. */
-@@ -843,11 +874,42 @@ static void voice_task(void *arg)
+@@ -843,11 +894,42 @@ static void voice_task(void *arg)
                  muse_audio_loopback_test(muse_settings_volume());
                  pre_reset();
              }
@@ -24454,7 +24516,7 @@ index 38c7c9d..6db9727 100644
              muse_state_poke();
              if (ev.type != MUSE_PTT_DOWN) {
                  continue;
-@@ -920,6 +982,23 @@ float muse_voice_monitor_db(void)
+@@ -920,6 +1002,23 @@ float muse_voice_monitor_db(void)
      return s_monitor_db;
  }
  
