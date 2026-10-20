@@ -268,7 +268,9 @@ async function botChat(req, env, ask) {
   const body = new ReadableStream({
     async start(ctl) {
       const say = (t) => ctl.enqueue(enc.encode(t));
-      say("收到，我去问小黑，请稍等。");
+      // The firmware reads the stream 200 bytes at a time and its HTTP client waits until a read is full, so a short
+      // acknowledgement followed by a long silence would sit unspoken until the answer arrives: pad it (spaces are skipped).
+      say("收到，我去问小黑，请稍等。" + " ".repeat(220));
       const until = Date.now() + BOT_WAIT_MS;
       while (Date.now() < until) {
         await new Promise((r) => setTimeout(r, 1500));
