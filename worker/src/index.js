@@ -179,11 +179,18 @@ async function llmStream(cfg, S, messages) {
 }
 
 async function chat(req, env, all, ctx) {
-  const { text: userText, muse_down: museDown } = await req.json().catch(() => ({}));
+  const { text: userText, muse_down: museDown, away } = await req.json().catch(() => ({}));
   // Muse mode: the first ask is answered with 503 so the firmware sends the text to Muse. If Muse stays silent for 30 s
   // the firmware asks again with muse_down:true, and then the configured model answers instead of failing the turn.
   if (all.cfg.muse_mode && !museDown) return json({ muse: true }, 503);
   if (!userText) return json({ error: "no text" }, 400);
+  // Away from home (the firmware says so when it is not on the home Wi-Fi) every turn goes to the Grok Bot; at home
+  // only when the bot's name is said first. If the bot cannot be reached the normal model answers.
+  const asked = away ? userText : botAsked(userText);
+  if (asked && env.GROKBOT_URL && env.GROKBOT_AUTH) {
+    const r = await botChat(req, env, asked);
+    if (r) return r;
+  }
   const { cfg, S } = all;
   const hKey = "h:" + (req.headers.get("x-device") || "muse-gadget");
   let hist = [];
@@ -196,6 +203,80 @@ async function chat(req, env, all, ctx) {
     if (reply && env.CFG) return env.CFG.put(hKey, JSON.stringify([...hist, { role: "user", content: userText }, { role: "assistant", content: reply }]), { expirationTtl: 1800 });
   }));
   return new Response(r.stream, { headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
+// ---- Grok Bot ----------------------------------------------------------------------------------------
+// A cloud agent that takes a webhook and answers later (30 s to a few minutes). The device speaks "ask" at once, the
+// gateway keeps the response open, and the bot POSTs its answer to /bot-reply with a one-time token; the answer is then
+// streamed on. Triggered by saying the bot's name first ("问小黑…"); everything else goes to the normal model.
+const BOT_TRIGGER = /^\s*(?:请|麻烦|帮我)?\s*(?:让|叫|问问?|找|交给|跟|和)?\s*(?:小黑|小嘿|grok|格罗克|机器人)\s*[，,、：:。.！!]?\s*(?:帮我|帮忙|给我|替我)?/i;
+const BOT_WAIT_MS = 270000;
+
+function botAsked(userText) {
+  const m = userText.match(BOT_TRIGGER);
+  if (!m) return null;
+  const rest = userText.slice(m[0].length).trim();
+  return rest || null;
+}
+
+function hex(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
+
+// The callback host's real address from a public resolver: some bots sit behind a DNS that answers with a fake 198.18.x.x.
+let dohCache = { host: "", ip: "", at: 0 };
+async function realIp(host) {
+  if (dohCache.host === host && Date.now() - dohCache.at < 300000) return dohCache.ip;
+  try {
+    const r = await fetch("https://cloudflare-dns.com/dns-query?name=" + encodeURIComponent(host) + "&type=A", { headers: { accept: "application/dns-json" } });
+    const ip = ((await r.json()).Answer || []).find((a) => a.type === 1)?.data || "";
+    dohCache = { host, ip, at: Date.now() };
+    return ip;
+  } catch (e) { return ""; }
+}
+
+async function botChat(req, env, ask) {
+  const id = hex(8), tok = hex(16);
+  const origin = env.BOT_CALLBACK_BASE || new URL(req.url).origin;
+  await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
+  const host = new URL(origin).hostname, port = new URL(origin).port || "443";
+  const ip = await realIp(host);
+  const hint = ip ? " 如果这个域名在你那里被解析成 198.18.x.x 之类的假地址，请改用真实地址：curl --resolve " + host + ":" + port + ":" + ip + " ，仍然使用上面的域名和 https。" : "";
+  const message = ask + "\n\n（这是桌上小圆屏设备的语音提问。请用中文纯文本简短回答，不要 Markdown。回答好以后，请用 HTTP POST 把答案发到 "
+    + origin + "/bot-reply?id=" + id + "&t=" + tok + " ，请求头 Content-Type: application/json，请求体 {\"reply\":\"你的回答\"}。这个地址只用一次，10 分钟内有效，不需要任何密钥或其他请求头。" + hint + "）";
+  const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
+  try {
+    const r = await fetch(env.GROKBOT_URL, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message }) });
+    console.log("bot webhook", r.status);
+    if (!r.ok) return null;             // the normal model answers instead
+  } catch (e) { console.log("bot webhook failed", String(e).slice(0, 120)); return null; }
+  const enc = new TextEncoder();
+  const body = new ReadableStream({
+    async start(ctl) {
+      const say = (t) => ctl.enqueue(enc.encode(t));
+      say("收到，我去问小黑，请稍等。");
+      const until = Date.now() + BOT_WAIT_MS;
+      while (Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 1500));
+        let v = null;
+        try { v = await env.CFG.get("bot:" + id, "json"); } catch (e) { /* retry */ }
+        if (v && v.text) { say("\n" + v.text.replace(/[*#`]+/g, "")); await env.CFG.delete("bot:" + id); ctl.close(); return; }
+      }
+      say("\n小黑一直没有回话，我先不等了。");
+      ctl.close();
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
+async function botReply(req, env, url) {
+  if (req.method !== "POST") return text("method", 405);
+  const id = url.searchParams.get("id") || "", t = url.searchParams.get("t") || "";
+  const v = id ? await env.CFG.get("bot:" + id, "json").catch(() => null) : null;
+  if (!v || v.tok !== t || v.text) return text("forbidden", 403);
+  const b = await req.json().catch(() => null);
+  const reply = (b && (b.text || b.reply || b.message) || "").toString().slice(0, 4000);
+  if (!reply.trim()) return json({ error: "no text" }, 400);
+  await env.CFG.put("bot:" + id, JSON.stringify({ tok: v.tok, text: reply }), { expirationTtl: 600 });
+  return json({ ok: true });
 }
 
 // ---- TTS ---------------------------------------------------------------------------------------------
@@ -409,6 +490,7 @@ async function admin(req, env, url, all) {
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+    if (url.pathname === "/bot-reply") return await botReply(req, env, url);   // the cloud bot calls this: a one-time token, not the gateway token
     if (!env.GATEWAY_TOKEN || url.searchParams.get("k") !== env.GATEWAY_TOKEN) return text("forbidden", 403);
     const all = await loadAll(env);
     try {
