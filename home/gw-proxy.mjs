@@ -7,7 +7,7 @@ import fs from "node:fs";
 const PORT = +process.env.PORT || 18443;
 const UP = { host: process.env.UP_HOST || "YOUR_LAN_IP", port: +process.env.UP_PORT || 8787 };
 const CERT = process.env.CERT, KEY = process.env.KEY;
-const ALLOWED = new Set(["/chat", "/tts", "/stt", "/bot-reply"]);   // /bot-reply: a cloud bot calls back with a one-time token
+const ALLOWED = new Set(["/chat", "/tts", "/stt"]);
 const MAX_BODY = 2 * 1024 * 1024;          // 60 s of 16 kHz PCM is about 2 MB
 const hits = new Map();                    // ip -> { t: [timestamps], bad: n, until: ms }
 
@@ -33,6 +33,8 @@ const server = https.createServer(ctx(), (req, res) => {
   if (req.method !== "POST" || !ALLOWED.has(path)) { res.writeHead(404); return res.end("not found"); }
   if (limited(ip)) { res.writeHead(429); return res.end("slow down"); }
   let size = 0;
+  const t0 = Date.now();
+  res.on("close", () => console.log(`${path} ${res.statusCode} ${Date.now() - t0}ms in=${size}B ip=${ip.replace(/^::ffff:/, "")}`));   // timing of every turn
   const up = http.request({ ...UP, method: "POST", path: req.url, headers: { ...req.headers, host: UP.host + ":" + UP.port } }, (ur) => {
     if (ur.statusCode === 403) reject(ip);
     res.writeHead(ur.statusCode || 502, ur.headers);
