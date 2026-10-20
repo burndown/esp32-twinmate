@@ -57,6 +57,18 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 
 我在真机上用手机热点验证过：识别、回答、语音合成都走了公网入口并正常播出。**注意**：曾试过 Cloudflare 隧道做这个入口，从我家出口到 Cloudflare 绕美国，`/chat` 要 4 到 9 秒、`/tts` 要 4 到 40 秒且波动很大，所以改成了直接开端口。你的网络不同，结果可能不同。
 
+## 接一个云端代理（Webhook 机器人）
+
+有些代理（比如 Grok Bot）不是同步问答：收到 Webhook 后过几十秒才回话，而且回话不在 HTTP 响应里。网关为此做了一条通路（只在家里网关上配，需要上面的公网入口）：
+
+1. **触发**：固件在不是家里 Wi-Fi 时，每次请求带 `"away": true`，网关把这一轮交给机器人；在家时只有说出机器人的名字（"问小黑……"）才交给它，其余仍走普通大模型。机器人联系不上时自动退回普通大模型。
+2. **发出**：网关 `POST` 你的 Webhook，请求体 `{"message": "<你说的话> + 一段说明"}`，说明里要机器人用 HTTP `POST` 把答案发到 `https://<你的域名>:<端口>/bot-reply?id=…&t=…`，请求体 `{"reply": "…"}`（`text`、`message` 字段也认）。`id` 和 `t` 是**每次请求一对的一次性令牌**，10 分钟内有效，只能成功一次，不需要网关令牌。
+3. **等待**：网关先让设备念一句"收到，我去问小黑，请稍等。"，然后保持连接，最长等 270 秒，机器人回调后把答案接着流给设备念出来；超时会说"小黑一直没有回话"。固件的读超时因此放宽到 300 秒。
+4. **配置**：网关环境变量 `GROKBOT_URL`、`GROKBOT_AUTH`（Webhook 地址和密钥）、`BOT_CALLBACK_BASE`（公网入口的完整前缀）。密钥放在你自己服务器权限 600 的文件里，不要进仓库。机器人如果有"允许访问的外部地址"名单，要把你的域名加进去。
+5. **一个坑**：有的机器人所在的网络会把域名解析成 `198.18.x.x` 这类假地址（本地代理的假 IP）。网关会用公共 DNS 查到真实 IP，写进说明里，让机器人用 `curl --resolve` 直连。
+
+我用真实的 Grok Bot 测过一次：发出、回调、接着念，全程 18.6 秒。设备上完整的"离家"那一轮，写这段时还没有实测。
+
 ## 部署网关
 
 需要 Node.js、一个 Cloudflare 账号，以及你要用的云服务的密钥。
@@ -104,7 +116,7 @@ printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .
 
 ## 固件
 
-补丁基于上游提交 `693cde9`，改动主要在 `esp32/components/muse/`（命令注册和处理在 `esp32/main/`）：识别、对话、合成三个客户端，Kconfig 选项，Unifont 16×16 中文字库，字幕和回复长度调整，以及这些保险：
+补丁基于上游提交 `fa07304`，改动主要在 `esp32/components/muse/`（命令注册和处理在 `esp32/main/`）：识别、对话、合成三个客户端，Kconfig 选项，Unifont 16×16 中文字库，字幕和回复长度调整，以及这些保险：
 
 - **识别回退**：`MUSE_STT_URL` 失败（或 5 秒没响应）就用 `MUSE_STT_FALLBACK_URL`。
 - **Muse 等待时间**可配（`MUSE_BRAIN_GIVEUP_SECONDS`）。
@@ -116,7 +128,7 @@ printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .
 
 ```bash
 git clone https://github.com/facebookincubator/muse-gadget-sdk.git
-cd muse-gadget-sdk && git checkout 693cde9
+cd muse-gadget-sdk && git checkout fa07304
 git apply /path/to/muse-gadget-cloud/firmware/muse-cloud.patch
 ```
 

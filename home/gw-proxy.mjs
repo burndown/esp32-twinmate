@@ -7,7 +7,7 @@ import fs from "node:fs";
 const PORT = +process.env.PORT || 18443;
 const UP = { host: process.env.UP_HOST || "YOUR_LAN_IP", port: +process.env.UP_PORT || 8787 };
 const CERT = process.env.CERT, KEY = process.env.KEY;
-const ALLOWED = new Set(["/chat", "/tts", "/stt"]);
+const ALLOWED = new Set(["/chat", "/tts", "/stt", "/bot-reply"]);   // /bot-reply: a cloud bot calls back with a one-time token
 const MAX_BODY = 2 * 1024 * 1024;          // 60 s of 16 kHz PCM is about 2 MB
 const hits = new Map();                    // ip -> { t: [timestamps], bad: n, until: ms }
 
