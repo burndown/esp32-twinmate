@@ -170,7 +170,7 @@ cd muse-gadget-sdk && git checkout fa07304
 git apply /path/to/muse-gadget-cloud/firmware/muse-cloud.patch
 ```
 
-复制 `firmware/sdkconfig.cloud.example` 成一个你**不提交**的文件，填上网关地址和令牌，然后按上游文档构建。以 Waveshare 1.75C 为例（ESP-IDF 6.0.1）：
+**纯云端部署请直接看 [docs/QUICKSTART-CLOUD.md](docs/QUICKSTART-CLOUD.md)**（部署网关、WireGuard、编译刷机、配对，一步一步，并写明验证到哪一步）。下面是家里网关版的做法：复制 `firmware/sdkconfig.cloud.example` 成一个你**不提交**的文件，填上网关地址和令牌，然后按上游文档构建。以 Waveshare 1.75C 为例（ESP-IDF 6.0.1）：
 
 ```bash
 cd esp32
@@ -179,7 +179,7 @@ idf.py -B build -DIDF_TARGET=esp32s3 -DSDKCONFIG=build/sdkconfig \
 python -m esptool --chip esp32s3 --port <串口> -b 460800 write-flash "@flash_args"   # 在 build 目录里
 ```
 
-其中 SDK token 要写进 `CONFIG_GADGET_SDK_TOKEN`（放你自己的未提交文件里）。刷机后在 Muse App 里配对。已知现象：用 esptool 只刷应用分区后，配对偶尔会丢，需要重新配。
+其中 SDK token 要写进 `CONFIG_GADGET_SDK_TOKEN`（放你自己的未提交文件里；格式是 `mgst_` 开头共 48 个字符，不对编译会直接报错）。刷机后在 Muse App 里配对。已知现象：用 esptool 只刷应用分区后，配对偶尔会丢，需要重新配。
 
 ## 为什么要 `CROSS_SIGNED_VERIFY`
 

@@ -26089,7 +26089,7 @@ index 0000000..21bf1d4
 +}
 +#endif
 diff --git a/esp32/main/app.c b/esp32/main/app.c
-index b7f076d..302b740 100644
+index b7f076d..f2dcd0a 100644
 --- a/esp32/main/app.c
 +++ b/esp32/main/app.c
 @@ -24,6 +24,7 @@
@@ -26100,16 +26100,17 @@ index b7f076d..302b740 100644
  #include "freertos/FreeRTOS.h"
  #include "freertos/task.h"
  #include "freertos/semphr.h"
-@@ -81,6 +82,8 @@
+@@ -81,6 +82,9 @@
  #endif
  #if CONFIG_MUSE_ENABLED
  #include "muse_glue.h"
++#include "muse_settings.h"
 +#include "muse_ui.h"
 +#include "muse_voice.h"
  #include "muse_input.h"
  // Muse joins Wi-Fi from its own settings, before or without pairing.
  #define WIFI_WITHOUT_PAIRING 1
-@@ -333,6 +336,23 @@ static void note_vm_credentials_accepted(void) {
+@@ -333,6 +337,23 @@ static void note_vm_credentials_accepted(void) {
      }
  }
  
@@ -26133,7 +26134,7 @@ index b7f076d..302b740 100644
  static bool operation_gate_take(TickType_t wait_ticks, const char *operation) {
      if (s_operation_gate
          && xSemaphoreTake(s_operation_gate, wait_ticks) == pdTRUE) {
-@@ -1903,7 +1923,29 @@ static cJSON *on_ws_command(
+@@ -1903,7 +1924,29 @@ static cJSON *on_ws_command(
          cJSON_AddBoolToObject(async, "_async", true);
          return async;
      }
@@ -26163,7 +26164,7 @@ index b7f076d..302b740 100644
          led_status_show_animation();
          cJSON *result = cJSON_CreateObject();
          cJSON_AddBoolToObject(result, "ok", true);
-@@ -2259,7 +2301,7 @@ bool app_wifi_forget(const char *ssid) {
+@@ -2259,7 +2302,7 @@ bool app_wifi_forget(const char *ssid) {
  static void muse_keep_vm_session(void) {
      static int64_t next_try;
      static int64_t backoff = MUSE_VM_RETRY_MIN_US;
@@ -26172,7 +26173,7 @@ index b7f076d..302b740 100644
          next_try = 0;
          backoff = MUSE_VM_RETRY_MIN_US;
          return;
-@@ -2884,7 +2926,7 @@ void app_run(void) {
+@@ -2884,7 +2927,7 @@ void app_run(void) {
          // nothing has rejected the token, so the refresh endpoint is contacted
          // only once CONFIG_HOMEHUB_TOKEN_REFRESH_INTERVAL_DAYS of uptime have
          // elapsed — but this poll is what makes that interval fire at all.
