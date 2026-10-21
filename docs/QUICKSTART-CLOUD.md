@@ -19,12 +19,14 @@
 cd worker
 npx wrangler login
 npx wrangler kv namespace create muse-gateway-cfg      # 把输出的 id 填进 wrangler.toml 的 REPLACE_WITH_KV_ID
-openssl rand -hex 24                                    # 生成网关令牌，记下来
-npx wrangler secret put GATEWAY_TOKEN                   # 粘贴令牌
+openssl rand -hex 24                                    # 生成设备令牌（写进固件的那个），记下来
+npx wrangler secret put GATEWAY_TOKEN                   # 粘贴设备令牌
+openssl rand -hex 24                                    # 再生成一个管理令牌，只在你的浏览器里用，不要写进固件
+npx wrangler secret put ADMIN_TOKEN                     # 粘贴管理令牌
 npx wrangler deploy
 ```
 
-打开 `https://<你的worker>.workers.dev/admin?k=<令牌>`，依次填：Azure 区域和密钥，识别选 Cloudflare Workers AI（免费、不要密钥），Grok Bot 的 Webhook 地址和授权，点每一项的"测试"。机器人的"允许访问的外部地址"里要加上页面里显示的 Worker 域名。保存后最多约一分钟生效。
+打开 `https://<你的worker>.workers.dev/admin?k=<管理令牌>`，依次填：Azure 区域和密钥，识别选 Cloudflare Workers AI（免费、不要密钥），Grok Bot 的 Webhook 地址和授权，点每一项的"测试"。机器人的"允许访问的外部地址"里要加上页面里显示的 Worker 域名。保存后最多约一分钟生效。
 
 ## 2. （可选）WireGuard 服务器
 

@@ -24,6 +24,15 @@ binding = "AI"
 name = "BOT"
 class_name = "BotWait"
 
+# The WireGuard registry: one request at a time, so two devices never get the same tunnel address.
+[[durable_objects.bindings]]
+name = "WG"
+class_name = "WgRegistry"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BotWait"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["WgRegistry"]

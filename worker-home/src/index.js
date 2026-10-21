@@ -36,6 +36,52 @@ async function loadAll(env) {
 const text = (s, status = 200, type = "text/plain; charset=utf-8") => new Response(s, { status, headers: { "content-type": type } });
 const json = (o, status = 200) => text(JSON.stringify(o), status, "application/json");
 
+// ---- limits and checks (a device token must not be a way to burn quotas or to aim the keys elsewhere) ------------------
+const MAX_PCM = 2 * 1024 * 1024;     // 60 s of 16 kHz PCM is 1.9 MB, which is also the most Azure takes
+const MAX_TTS_CHARS = 600;           // the firmware sends at most 480 bytes at a time
+const MAX_CHAT_CHARS = 1000;
+const MAX_AVATAR = 120 * 1024;       // 233x233 RGB565 is 108 KB
+const MAX_PENDING_PEERS = 20;        // device keys that asked for a tunnel and nobody has approved yet
+const tooLarge = () => json({ error: "too large" }, 413);
+// A /chat reply is plain text that gets spoken. When the bot fails, the rest of the reply is not an answer: it starts with this
+// control character, followed by a short code (bot_timeout, bot_unreachable); the firmware shows an error instead of speaking it.
+const ERR = "\u0001";
+
+// ---- two tokens --------------------------------------------------------------------------------------------
+// GATEWAY_TOKEN is in every device's firmware (whoever holds a device holds it) and opens only what a device needs.
+// ADMIN_TOKEN stays in your browser and opens the settings page and the other management routes. Without ADMIN_TOKEN the device
+// token still opens them (an old deployment keeps working) and the settings page says so.
+const isAdminPath = (p) => p.startsWith("/admin") || p === "/wg/peers" || p === "/avatar/set" || p === "/health";
+const givenToken = (req, url) => url.searchParams.get("k") || (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+
+// Azure Speech host for a region name ("eastasia"), or a full "<region>.tts.speech.microsoft.com" / ".azure.cn" host; nothing else,
+// because the Azure key travels with the request.
+function azureHost(region, svc) {
+  const r = String(region || "eastasia").toLowerCase();
+  if (/^[a-z0-9]{3,30}$/.test(r)) return `${r}.${svc}.speech.microsoft.com`;
+  const m = r.match(/^([a-z0-9]{3,30})\.(?:tts|stt)\.speech\.(microsoft\.com|azure\.cn)$/);
+  if (m) return `${m[1]}.${svc}.speech.${m[2]}`;
+  throw new Error("bad Azure region");
+}
+// The bot's webhook and callback addresses must be https on a public-looking host; the bot's credentials go there.
+function checkHttpsUrl(s) {
+  let u;
+  try { u = new URL(String(s)); } catch (e) { throw new Error("not a URL"); }
+  const h = u.hostname;
+  if (u.protocol !== "https:" || !h.includes(".") || h.includes(":") || /^[\d.]+$/.test(h) || /(^|\.)(localhost|local|internal|lan|home|test|invalid)$/i.test(h)) throw new Error("only https addresses on a public host name are accepted");
+  return u.href;
+}
+async function sha256(s) { return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))); }
+async function safeEq(a, b) { return crypto.subtle.timingSafeEqual(await sha256(a), await sha256(b)); }
+// A bot-reply id is 16 random hex digits followed by 16 digits of HMAC(random, gateway token): a forged callback is refused before
+// any storage is touched.
+async function hmac16(env, data) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.GATEWAY_TOKEN || ""), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data))).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function signedId(env) { const r = hex(8); return r + (await hmac16(env, r)); }
+async function idValid(env, id) { return /^[0-9a-f]{32}$/.test(id) && (await safeEq(await hmac16(env, id.slice(0, 16)), id.slice(16))); }
+
 function b64(bytes) {
   let s = "";
   for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
@@ -84,8 +130,7 @@ async function recognise(cfg, S, audio, mime, AI) {
     // Azure Speech short-audio REST API: the same resource, key and region as Azure text-to-speech (60 s of audio at most).
     if (!S.azure_key) throw new Error("Azure Speech key not set");
     if (mime !== "audio/wav") throw new Error("Azure ASR takes WAV only");
-    const region = cfg.tts.region || "eastasia";
-    const host = region.includes(".") ? region.replace(".tts.", ".stt.") : `${region}.stt.speech.microsoft.com`;
+    const host = azureHost(cfg.tts.region, "stt");
     const lang = A.language || "zh-CN";
     const r = await fetch(`https://${host}/speech/recognition/conversation/cognitiveservices/v1?language=${encodeURIComponent(lang)}&format=simple`, {
       method: "POST",
@@ -123,7 +168,9 @@ async function recognise(cfg, S, audio, mime, AI) {
 }
 
 async function stt(req, env, all) {
+  if ((+req.headers.get("content-length") || 0) > MAX_PCM) return tooLarge();
   const pcm = new Uint8Array(await req.arrayBuffer());
+  if (pcm.length > MAX_PCM) return tooLarge();
   const rate = parseInt(req.headers.get("x-sample-rate") || "16000", 10);
   if (pcm.length < 3200) return json({ text: "" });           // under 0.1 s: nothing to recognise
   try { return json({ text: await recognise(all.cfg, all.S, wav(pcm, rate), "audio/wav", all.AI) }); }
@@ -210,7 +257,8 @@ async function chat(req, env, all, ctx) {
   // the firmware asks again with muse_down:true, and then the configured model answers instead of failing the turn.
   // gemini: the device is away and the user chose the model for that case, so neither Muse nor the bot is asked.
   if (all.cfg.muse_mode && !museDown && !gemini) return json({ muse: true }, 503);
-  if (!userText) return json({ error: "no text" }, 400);
+  if (!userText || typeof userText !== "string") return json({ error: "no text" }, 400);
+  if (userText.length > MAX_CHAT_CHARS) return tooLarge();
   // Away from home (the firmware says so when it is not on the home Wi-Fi) every turn goes to the Grok Bot; at home
   // only when the bot's name is said first. If the bot cannot be reached the normal model answers.
   const asked = gemini ? "" : (away ? userText : botAsked(userText));
@@ -327,7 +375,7 @@ async function botSet(env, id, tok, reply) {
 }
 
 async function botChat(req, env, ask, all) {
-  const id = hex(8), tok = hex(16);
+  const id = await signedId(env), tok = hex(16);
   await botInit(env, id, tok);
   const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
   // The message to the bot names where to send the answer: the relay's address when the Webhook goes out through the relay,
@@ -372,13 +420,13 @@ async function botChat(req, env, ask, all) {
           const rd = r.stream.getReader();
           say("\n");
           for (;;) { const { done, value } = await rd.read(); if (done) break; ctl.enqueue(value); }
-        } catch (e) { say("\n没能联系上小黑。"); }
+        } catch (e) { say(ERR + "bot_unreachable"); }
         ctl.close();
         return;
       }
       const answer = await botWait(env, id, BOT_WAIT_MS);
       if (answer) { say("\n" + answer.replace(/[*#`]+/g, "")); ctl.close(); return; }
-      say("\n小黑一直没有回话，我先不等了。");
+      say(ERR + "bot_timeout");
       ctl.close();
     },
   });
@@ -392,7 +440,7 @@ async function botReply(req, env, url) {
   const seg = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean).slice(1);
   const id = seg[0] || url.searchParams.get("id") || "";
   const t = seg[1] || url.searchParams.get("t") || url.searchParams.get("amp;t") || "";
-  if (!id) return text("forbidden", 403);
+  if (!(await idValid(env, id))) return text("forbidden", 403);   // forged ids never reach storage
   const b = await req.json().catch(() => null);
   const reply = (b && (b.text || b.reply || b.message) || "").toString().slice(0, 4000);
   if (!reply.trim()) return json({ error: "no text" }, 400);
@@ -477,7 +525,7 @@ const xmlEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/
 async function synthAzure(cfg, S, t) {
   if (!S.azure_key) throw new Error("azure speech key not set");
   const T = cfg.tts;
-  const host = (T.region || "eastasia").includes(".") ? T.region : `${T.region || "eastasia"}.tts.speech.microsoft.com`;
+  const host = azureHost(T.region, "tts");
   const lang = (T.voice || "zh-CN-XiaoxiaoNeural").split("-").slice(0, 2).join("-");
   const ssml = `<speak version='1.0' xml:lang='${lang}'><voice name='${T.voice || "zh-CN-XiaoxiaoNeural"}'>${xmlEsc(t)}</voice></speak>`;
   const r = await fetch(`https://${host}/cognitiveservices/v1`, {
@@ -519,7 +567,8 @@ async function synthAll(cfg, S, t) {
 
 async function tts(req, env, all) {
   const { text: t } = await req.json().catch(() => ({}));
-  if (!t) return json({ error: "no text" }, 400);
+  if (!t || typeof t !== "string") return json({ error: "no text" }, 400);
+  if (t.length > MAX_TTS_CHARS) return tooLarge();
   try {
     const { audio, parts } = await synthAll(all.cfg, all.S, t);
     return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-parts": String(parts) } });
@@ -531,39 +580,91 @@ async function tts(req, env, all) {
 
 
 // ---- WireGuard enrolment -----------------------------------------------------------------------------
-// The device makes its own key pair and POSTs the public key here. It gets back the server's public key,
-// the endpoint and a tunnel address (one per key, kept in KV). Nothing works until a person adds the key on
-// the WireGuard server: GET /wg/peers?k=... prints the `wg set` lines for the keys that asked.
-async function wgEnroll(req, env) {
-  if (!env.CFG || !env.WG_SERVER_PUB || !env.WG_ENDPOINT) return json({ error: "wireguard not set up" }, 503);
-  const { pub } = await req.json().catch(() => ({}));
-  if (typeof pub !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(pub)) return json({ error: "bad key" }, 400);
-  const base = env.WG_SUBNET || "10.77.0.";
-  let peer = await env.CFG.get("wg:p:" + pub, "json");
-  if (!peer) {
-    const n = (parseInt(await env.CFG.get("wg:next")) || 2);
-    if (n > 250) return json({ error: "no addresses left" }, 507);
-    peer = { ip: base + n, at: new Date().toISOString() };
-    await env.CFG.put("wg:p:" + pub, JSON.stringify(peer));
-    await env.CFG.put("wg:next", String(n + 1));
-    const list = (await env.CFG.get("wg:list", "json")) || [];
-    list.push(pub);
-    await env.CFG.put("wg:list", JSON.stringify(list));
+// The device makes its own key pair and POSTs the public key here. It gets back the server's public key, the endpoint and a
+// tunnel address; nothing works until a person adds the key on the WireGuard server (the settings page lists the keys that asked,
+// with the `wg set` line to run, and marks them approved or revokes them). The registry is a Durable Object so that concurrent
+// requests cannot hand out the same address; keys nobody approved within a week are forgotten, and at most MAX_PENDING_PEERS can
+// wait at once, so stray requests cannot use up the address pool.
+export class WgRegistry {
+  constructor(state) { this.state = state; }
+  async fetch(req) {
+    const path = new URL(req.url).pathname;
+    const b = await req.json().catch(() => ({}));
+    const peers = (await this.state.storage.get("peers")) || {};
+    if (path === "/enroll") {
+      let p = peers[b.pub];
+      if (!p) {
+        if (Object.values(peers).filter((x) => !x.ok).length >= MAX_PENDING_PEERS) return Response.json({ error: "too many waiting" }, { status: 429 });
+        const used = new Set(Object.values(peers).map((x) => x.n));
+        let n = 2;
+        while (used.has(n) && n <= 250) n++;
+        if (n > 250) return Response.json({ error: "no addresses left" }, { status: 507 });
+        p = peers[b.pub] = { n, at: new Date().toISOString(), ok: false };
+        await this.state.storage.put("peers", peers);
+        await this.state.storage.setAlarm(Date.now() + 86400000);
+      }
+      return Response.json({ n: p.n });
+    }
+    if (path === "/import") {   // once: the registry starts from the peers an older version kept in KV
+      if (!(await this.state.storage.get("imported"))) {
+        await this.state.storage.put("peers", { ...b.peers, ...peers });
+        await this.state.storage.put("imported", true);
+      }
+      return Response.json({ ok: true });
+    }
+    if (path === "/list") return Response.json({ peers });
+    if (path === "/approve" || path === "/revoke") {
+      if (!peers[b.pub]) return Response.json({ error: "unknown key" }, { status: 404 });
+      if (path === "/approve") peers[b.pub].ok = true; else delete peers[b.pub];
+      await this.state.storage.put("peers", peers);
+      return Response.json({ ok: true });
+    }
+    return new Response("not found", { status: 404 });
   }
-  return json({ server_pub: env.WG_SERVER_PUB, endpoint: env.WG_ENDPOINT, port: parseInt(env.WG_PORT) || 51820,
-    address: peer.ip, netmask: "255.255.255.0", keepalive: 25, now: Math.floor(Date.now() / 1000) });
+  async alarm() {
+    const peers = (await this.state.storage.get("peers")) || {};
+    let waiting = false;
+    for (const [k, p] of Object.entries(peers)) {
+      if (p.ok) continue;
+      if (Date.now() - Date.parse(p.at) > 7 * 86400000) delete peers[k]; else waiting = true;
+    }
+    await this.state.storage.put("peers", peers);
+    if (waiting) await this.state.storage.setAlarm(Date.now() + 86400000);
+  }
 }
+const reg = (env, path, body) => env.WG.get(env.WG.idFromName("registry")).fetch("https://wg/" + path, { method: "POST", body: JSON.stringify(body || {}) });
 
-async function wgPeers(env) {
+const wgConf = (env) => ({ server_pub: env.WG_SERVER_PUB || "", endpoint: env.WG_ENDPOINT || "", port: parseInt(env.WG_PORT) || 51820, subnet: env.WG_SUBNET || "10.77.0." });
+// Peers that were registered before the registry existed (KV keys wg:list / wg:p:<key>) are taken over once, as approved.
+async function wgImport(env) {
   const list = (env.CFG && (await env.CFG.get("wg:list", "json"))) || [];
-  const lines = [];
+  const peers = {};
   for (const pub of list) {
     const p = await env.CFG.get("wg:p:" + pub, "json");
-    if (p) lines.push(`sudo wg set wg0 peer '${pub}' allowed-ips ${p.ip}/32   # asked ${p.at}`);
+    const n = p && parseInt(String(p.ip).split(".").pop());
+    if (n) peers[pub] = { n, at: p.at, ok: true };
   }
-  return text(lines.join("\n") + "\n");
+  await reg(env, "import", { peers });
 }
-
+async function wgEnroll(req, env, all) {
+  const W = wgConf(env);
+  if (!env.WG) return json({ error: "the WG Durable Object is not bound (see wrangler.toml)" }, 503);
+  if (!W.server_pub || !W.endpoint) return json({ error: "wireguard not set up" }, 503);
+  await wgImport(env);
+  const { pub } = await req.json().catch(() => ({}));
+  if (typeof pub !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(pub)) return json({ error: "bad key" }, 400);
+  const r = await reg(env, "enroll", { pub });
+  if (!r.ok) return json(await r.json().catch(() => ({ error: "registry" })), r.status);
+  const { n } = await r.json();
+  return json({ server_pub: W.server_pub, endpoint: W.endpoint, port: W.port || 51820, address: W.subnet + n, netmask: "255.255.255.0", keepalive: 25,
+    now: Math.floor(Date.now() / 1000) });
+}
+async function wgList(env, W) {
+  if (!env.WG) return [];
+  await wgImport(env);
+  const { peers } = await (await reg(env, "list")).json();
+  return Object.entries(peers).sort((a, b) => a[1].n - b[1].n).map(([pub, p]) => ({ pub, ip: W.subnet + p.n, at: p.at, ok: !!p.ok, cmd: `sudo wg set wg0 peer '${pub}' allowed-ips ${W.subnet}${p.n}/32` }));
+}
 
 // ---- avatar picture ---------------------------------------------------------------------------------
 // One picture for the round screen: 16-byte header ("MAV1", width, height, byte count) + RGB565 pixels, made by
@@ -576,7 +677,9 @@ async function avatarGet(env) {
 }
 
 async function avatarSet(req, env) {
+  if ((+req.headers.get("content-length") || 0) > MAX_AVATAR) return tooLarge();
   const b = await req.arrayBuffer();
+  if (b.byteLength > MAX_AVATAR) return tooLarge();
   const v = new DataView(b);
   if (b.byteLength < 16 || v.getUint32(0, true) !== 0x3156414d) return json({ error: "not a MAV1 picture" }, 400);
   const w = v.getUint16(4, true), h = v.getUint16(6, true), n = v.getUint32(8, true);
@@ -609,6 +712,7 @@ async function admin(req, env, url, all) {
         keep[k] = {};
         for (const [f, v] of Object.entries(c[k])) if (["string", "boolean"].includes(typeof v)) keep[k][f] = v;
       }
+      if (keep.tts && keep.tts.region) { try { azureHost(keep.tts.region, "tts"); } catch (e) { return json({ error: "区域名不对：只能是 eastasia 这样的名字" }, 400); } }
       await env.CFG.put("config", JSON.stringify(keep));
     }
     if (body.secrets) {
@@ -621,10 +725,16 @@ async function admin(req, env, url, all) {
     }
     return json({ ok: true });
   }
+  if (p === "/admin/wg" && req.method === "POST") {   // {action: "approve" | "revoke", pub}
+    const { action, pub } = await req.json().catch(() => ({}));
+    if (!env.WG || !["approve", "revoke"].includes(action) || typeof pub !== "string" || !/^[A-Za-z0-9+\/]{43}=$/.test(pub)) return json({ error: "bad request" }, 400);
+    const r = await reg(env, action, { pub });
+    return json(await r.json().catch(() => ({})), r.status);
+  }
   if (p === "/admin/voices" && req.method === "GET") {         // the full live voice list of the vendor (Azure)
     if (!all.S.azure_key) return json({ error: "先在“密钥”里填 Azure Speech 密钥并保存" }, 400);
-    const region = url.searchParams.get("region") || all.cfg.tts.region || "eastasia";
-    const host = region.includes(".") ? region : `${region}.tts.speech.microsoft.com`;
+    let host;
+    try { host = azureHost(url.searchParams.get("region") || all.cfg.tts.region, "tts"); } catch (e) { return json({ error: "区域名不对：只能是 eastasia 这样的名字" }, 400); }
     const r = await fetch(`https://${host}/cognitiveservices/voices/list`, { headers: { "Ocp-Apim-Subscription-Key": all.S.azure_key } });
     if (!r.ok) return json({ error: "Azure 返回 " + r.status + "（密钥或区域不对？）" }, 502);
     const list = await r.json();
@@ -668,11 +778,12 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the cloud bot calls this: a one-time token, not the gateway token
-    if (!env.GATEWAY_TOKEN || url.searchParams.get("k") !== env.GATEWAY_TOKEN) return text("forbidden", 403);
+    const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
+    if (!want || !(await safeEq(givenToken(req, url), want))) return text("forbidden", 403);
     const all = await loadAll(env);
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
-      if (url.pathname === "/wg/peers" && req.method === "GET") return await wgPeers(env);
+      if (url.pathname === "/wg/peers" && req.method === "GET") return text((await wgList(env, wgConf(env))).map((p) => p.cmd + "   # asked " + p.at + (p.ok ? " (approved)" : "")).join("\n") + "\n");
       if (url.pathname === "/health") return json({ ok: true, muse_mode: !!all.cfg.muse_mode, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
       if (req.method !== "POST") return text("method", 405);
       if (url.pathname === "/avatar") return await avatarGet(env);

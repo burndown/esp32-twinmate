@@ -39,9 +39,9 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 
 <div class="card">
 <h2>这个网关</h2>
-<p class="hint" style="margin-top:6px">固件里要填的地址（三个都用这个域名，令牌是 <code>?k=</code> 后面那串，就是你打开这个页面用的）：</p>
+<p class="hint" style="margin-top:6px">固件里要填的地址（三个都用这个域名；<code>?k=</code> 后面是<b>设备令牌</b> <code>GATEWAY_TOKEN</code>。如果设置了 <code>ADMIN_TOKEN</code>，你现在打开这个页面用的是管理令牌，两者不同）：</p>
 <div id="urls" class="hint"></div>
-<p style="margin:10px 0 0"><span class="badge" id="b_ai"></span><span class="badge" id="b_do"></span></p>
+<p style="margin:10px 0 0"><span class="badge" id="b_ai"></span><span class="badge" id="b_do"></span><span class="badge" id="b_admin"></span></p>
 <p class="hint" id="b_hint"></p>
 </div>
 
@@ -119,6 +119,7 @@ function fill(d) {
   for (const n of SECRETS) $("st_" + n).textContent = d.secrets[n] || "还没有设置";
   $("urls").innerHTML = ["chat", "tts", "stt"].map((p) => "<code>" + ORIGIN + "/" + p + "?k=…</code>").join("<br>");
   $("b_ai").textContent = d.binding.ai ? "Workers AI 绑定：有" : "Workers AI 绑定：没有"; $("b_ai").className = "badge" + (d.binding.ai ? " ok" : "");
+  $("b_admin").textContent = d.binding.admin_token ? "管理令牌：独立（设备令牌打不开这个页面）" : "管理令牌：没设置，设备令牌也能打开这个页面（建议设置 ADMIN_TOKEN）"; $("b_admin").className = "badge" + (d.binding.admin_token ? " ok" : "");
   $("b_do").textContent = d.binding.durable ? "Durable Object：有" : "Durable Object：没有（回调会有延迟）"; $("b_do").className = "badge" + (d.binding.durable ? " ok" : "");
   $("cbhost").textContent = new URL(c.bot.callback_base || ORIGIN).hostname;
   const peers = d.peers || [];

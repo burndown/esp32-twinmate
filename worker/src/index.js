@@ -6,6 +6,7 @@
 //   POST /wg/enroll, GET /wg/peers          a device asks for a WireGuard tunnel; a person approves it on the server
 //   POST /avatar, /avatar/set               the picture for the round screen
 //   GET  /admin?k=...                       the settings page
+// Two tokens: GATEWAY_TOKEN (devices) and ADMIN_TOKEN (the settings page, /wg/peers, /avatar/set, /health).
 // Limits: /stt 2 MB, /tts 600 characters, /chat 1000 characters, avatar 120 KB (413 beyond that).
 // Settings live in KV (key "config"), keys in KV (key "secrets"); Worker secrets with the upper-case names also work.
 import adminHtml from "./admin.html";
@@ -44,6 +45,16 @@ const MAX_CHAT_CHARS = 1000;
 const MAX_AVATAR = 120 * 1024;       // 233x233 RGB565 is 108 KB
 const MAX_PENDING_PEERS = 20;        // device keys that asked for a tunnel and nobody has approved yet
 const tooLarge = () => json({ error: "too large" }, 413);
+// A /chat reply is plain text that gets spoken. When the bot fails, the rest of the reply is not an answer: it starts with this
+// control character, followed by a short code (bot_timeout, bot_unreachable); the firmware shows an error instead of speaking it.
+const ERR = "\u0001";
+
+// ---- two tokens --------------------------------------------------------------------------------------------
+// GATEWAY_TOKEN is in every device's firmware (whoever holds a device holds it) and opens only what a device needs.
+// ADMIN_TOKEN stays in your browser and opens the settings page and the other management routes. Without ADMIN_TOKEN the device
+// token still opens them (an old deployment keeps working) and the settings page says so.
+const isAdminPath = (p) => p.startsWith("/admin") || p === "/wg/peers" || p === "/avatar/set" || p === "/health";
+const givenToken = (req, url) => url.searchParams.get("k") || (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
 
 // Azure Speech host for a region name ("eastasia"), or a full "<region>.tts.speech.microsoft.com" / ".azure.cn" host; nothing else,
 // because the Azure key travels with the request.
@@ -326,8 +337,8 @@ async function chat(req, env, all) {
       try {
         const wait = await botAsk(req, env, all, userText);
         const answer = await wait();
-        say(answer ? "\n" + answer.replace(/[*#`]+/g, "") : "\n小黑一直没有回话，我先不等了。");
-      } catch (e) { console.log("bot", String(e).slice(0, 150)); say("\n没能联系上小黑。"); }
+        say(answer ? "\n" + answer.replace(/[*#`]+/g, "") : ERR + "bot_timeout");
+      } catch (e) { console.log("bot", String(e).slice(0, 150)); say(ERR + "bot_unreachable"); }
       ctl.close();
     },
   }), { headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -442,7 +453,7 @@ async function admin(req, env, url, all) {
   if (p === "/admin/api" && req.method === "GET") {
     const secrets = {};
     for (const n of Object.keys(SECRET_ENV)) secrets[n] = mask(all.S[n]);
-    return json({ config: all.cfg, secrets, peers: await wgList(env, all.cfg.wg), binding: { ai: !!all.AI, durable: !!env.BOT }, origin: url.origin });
+    return json({ config: all.cfg, secrets, peers: await wgList(env, all.cfg.wg), binding: { ai: !!all.AI, durable: !!env.BOT, admin_token: !!env.ADMIN_TOKEN }, origin: url.origin });
   }
   if (p === "/admin/api" && req.method === "POST") {
     if (!env.CFG) return json({ error: "KV not bound" }, 500);
@@ -528,7 +539,8 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the bot calls this: a one-time token, not the gateway token
-    if (!env.GATEWAY_TOKEN || !(await safeEq(url.searchParams.get("k") || "", env.GATEWAY_TOKEN))) return text("forbidden", 403);
+    const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
+    if (!want || !(await safeEq(givenToken(req, url), want))) return text("forbidden", 403);
     const all = await loadAll(env);
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
