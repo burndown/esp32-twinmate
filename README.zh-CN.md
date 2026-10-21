@@ -2,12 +2,18 @@
 
 [English](README.md) · **中文**
 
-本项目基于 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk)，为 ESP32 设备扩展语音服务、机器人接入和屏幕交互功能。目前适配 **Waveshare ESP32-S3-Touch-AMOLED-1.75C** 圆屏开发板。
+本项目是 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 固件的修改版，面向 **Waveshare ESP32-S3-Touch-AMOLED-1.75C** 圆形触摸屏（目前只适配这一块板子）。在原有基础上增加：
 
-- **网关无需自建服务器**：网关部署在你自己的 Cloudflare 账号下，语音识别使用 Cloudflare Whisper 或 Azure Speech，语音合成使用 Azure Speech。
-- **可切换回答来源**：支持 Muse 助手和自定义 Webhook 机器人，在设备的 **Answers** 菜单中切换。自定义机器人在菜单中称为 **Grok Bot**，不限定使用 Grok 模型。
-- **可选的 WireGuard 连接**：网络无法直连 Muse 或网关时，可通过设备内置的 WireGuard 客户端连接服务器。使用此功能需要另行准备一台可访问目标服务的 Linux 服务器。
-- **圆屏交互**：支持会眨眼、随触摸和倾斜转动的眼睛头像，自定义图片头像、等待计时圈、触摸后显示状态信息、`display.show_text` 提词器，以及 Muse 主对话的消息推送朗读。完整功能见 [固件说明](docs/FIRMWARE.zh-CN.md)。
+- **先转文字，再交给回答者**：你说的话先由你自己的网关识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再把文字交给 Muse 或机器人。
+- **自定义 Webhook 机器人**：在设备的 **Answers** 菜单里切换 Muse 和机器人。菜单里叫 Grok Bot，但任何能接收 HTTPS Webhook、并通过回调送回答案的机器人都可以，不一定要用 Grok 模型。
+- **语音播报**：回复由 Azure Speech 合成语音，在设备上播放。个人使用通常在免费额度内，具体以服务商当前的条款为准。
+- **Muse 把文字发到屏幕上**：原版固件里 Muse 只能发图片。本项目还支持接收文字：`display.show_text` 命令把文字显示成滚动的提词器并可朗读，Muse 主动发来的消息也可以被念出来（“所有消息”）。
+- **WireGuard（可选）**：所在网络无法直连 Muse 时，设备通过你自己的 Linux 服务器隧道连接。
+- **Cloudflare 网关**：部署在你自己的账号下，设置页管理识别、合成、机器人和 WireGuard，设备令牌与管理令牌分开。
+- **头像与交互**：会眨眼、随手指和板子倾斜转动的眼睛，可更换的头像（包括你自己的图片），等待计时圈，以及状态图标碰一下才出现的干净主屏。
+- **一个配置文件、三条命令**即可部署网关、编译并刷写固件。全部功能（包括稳定性修复）见 [固件说明](docs/FIRMWARE.zh-CN.md)。
+
+本项目建立在他人工作的基础上：Meta 的固件（Apache-2.0）、改编自 [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot)（MIT）的眼睛，以及改编自 [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk) 的“所有消息”。详见文末的“安全与许可”。
 
 这是个人项目，未经 Meta 审核。使用 Muse 需要你自己的 SDK token，并遵守 [Gadget SDK Terms](https://gadgets.muse.ai)。语音和对话内容会发送到你配置的云服务；选择 Webhook 机器人时，识别出的文字也会发送给该机器人。
 

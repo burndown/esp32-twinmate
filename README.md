@@ -2,12 +2,18 @@
 
 **English** · [中文](README.zh-CN.md)
 
-This project extends Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) with speech services, bot integration and screen interactions for ESP32 devices. It currently supports the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** round touch-screen board.
+This project is a modified version of the firmware of Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk), for the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** round touch screen (the only board supported so far). It adds:
 
-- **No self-hosted gateway required**. Deploy the gateway to your own Cloudflare account. Use Cloudflare Whisper or Azure Speech for recognition, and Azure Speech for synthesis.
-- **Choose who answers**. Switch between Muse and a custom Webhook bot in the device's **Answers** menu. The menu calls the custom bot **Grok Bot**, but it does not have to use a Grok model.
-- **Optional WireGuard connectivity**. When your network cannot reach Muse or the gateway directly, the built-in WireGuard client can connect through a Linux server you provide. That server must be able to reach the required services.
-- **Round-screen interactions**. Blinking eyes that follow touch and tilt, custom picture avatars, a waiting ring, status information shown on touch, a `display.show_text` teleprompter, and spoken push messages from the main Muse chat. See the [firmware guide](docs/FIRMWARE.md) for the full feature list.
+- **Text first, then the answerer.** What you say is first recognised by your own gateway (Cloudflare Whisper or Azure Speech, your choice), and the resulting text is handed to Muse or to a bot.
+- **A custom Webhook bot.** Switch between Muse and a bot in the device's **Answers** menu. The menu calls it **Grok Bot**, but any bot that accepts an HTTPS Webhook and sends its answer back by callback will do; it does not have to use a Grok model.
+- **Spoken replies.** Replies are synthesised with Azure Speech and played on the device. For one person the usage normally stays within the free tiers; check the providers' current terms.
+- **Text from Muse on the screen.** The original firmware lets Muse send only pictures. This one also accepts text: the `display.show_text` command shows it as a scrolling teleprompter and can read it aloud, and Muse's own messages can be spoken ("All messages").
+- **WireGuard (optional).** When the network you are on cannot reach Muse directly, the device connects through a Linux server of your own.
+- **A Cloudflare gateway.** Deployed to your own account; a settings page manages recognition, synthesis, the bot and WireGuard, and the device and admin tokens are separate.
+- **Avatars and interactions.** Blinking eyes that follow your finger and the tilt of the board, avatars you can change (including a picture of your own), a waiting ring, and a clean main screen where the status icons appear only when you touch it.
+- **One settings file, three commands** to deploy the gateway, build the firmware and flash it. See the [firmware guide](docs/FIRMWARE.md) for every feature, including the stability fixes.
+
+It builds on other people's work: Meta's firmware (Apache-2.0), the eyes adapted from [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot) (MIT), and "All messages" adapted from [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk). See [Security and licensing](#security-and-licensing).
 
 This is a personal project and has not been reviewed by Meta. Muse requires your own SDK token and use is subject to the [Gadget SDK Terms](https://gadgets.muse.ai). Voice and conversation data are sent to the cloud services you configure. When you choose a Webhook bot, the recognised text is also sent to that bot.
 
