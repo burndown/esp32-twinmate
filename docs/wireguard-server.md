@@ -32,3 +32,7 @@ sudo systemctl enable --now wg-quick@wg0     # 要开 net.ipv4.ip_forward=1
 ## 不经过网关配置设备
 
 在固件的 Kconfig 里设置 `MUSE_WG_ENDPOINT`、`MUSE_WG_PORT`、`MUSE_WG_SERVER_KEY`（`server.pub` 的内容）和 `MUSE_WG_ADDRESS`（这台设备在隧道里的地址，例如 `10.77.0.2`）。刷机后设备会生成自己的密钥对，在设置 → WireGuard 页和开机日志里能看到公钥，然后在服务器上执行 `sudo wg set wg0 peer '<公钥>' allowed-ips 10.77.0.2/32`。网关不需要 `WG_SERVER_PUB` 和 `WG_ENDPOINT`。
+
+## 刷机前就生成密钥
+
+`tools/make-wg-config.py --address 10.77.0.2 --server-key <server.pub 的内容> --endpoint <服务器地址> --append my-cloud.defaults` 生成这台设备的密钥对，把含私钥的配置追加进 `my-cloud.defaults`（权限 600，不要提交），并打印服务器上要执行的 `sudo wg set …` 一行。先在服务器上执行，再刷机，设备开机就连得上。

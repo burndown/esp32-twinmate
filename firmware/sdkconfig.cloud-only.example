@@ -17,12 +17,18 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 # ---- no language model: Settings > Answers offers Muse and the Grok Bot; a failure is shown as an error ----
 # CONFIG_MUSE_MODEL_ANSWERS is not set
 
-# ---- WireGuard: the gateway's requests go through the tunnel as well, and Auto starts it when Muse or the gateway is unreachable ----
+# ---- WireGuard: the gateway's requests go through the tunnel as well, and the tunnel starts when Muse or the gateway is unreachable ----
+# Easiest: run tools/make-wg-config.py once per device. It makes the device's key pair and prints these lines (private key
+# included) and the one command to run on the WireGuard server, BEFORE you flash; the device then needs nothing at its first start.
+#   python3 tools/make-wg-config.py --address 10.77.0.2 --server-key SERVER_PUBLIC_KEY --endpoint your.server.example --append my-cloud.defaults
 CONFIG_ESP_NETIF_BRIDGE_EN=y
 CONFIG_MUSE_GATEWAY_VIA_TUNNEL=y
 CONFIG_MUSE_WG_ENDPOINT="YOUR_WG_SERVER_HOST_OR_IP"
 CONFIG_MUSE_WG_PORT=51820
 CONFIG_MUSE_WG_SERVER_KEY="YOUR_WG_SERVER_PUBLIC_KEY"
 CONFIG_MUSE_WG_ADDRESS="10.77.0.2"
-# The device makes its own key pair at the first start. Add its public key on the server (the boot log prints it, Settings >
-# WireGuard shows it): sudo wg set wg0 peer '<public key>' allowed-ips 10.77.0.2/32
+# Without the next line the device makes its own key pair at the first start (the boot log and Settings > WireGuard show the
+# public key); then add it on the server: sudo wg set wg0 peer '<public key>' allowed-ips 10.77.0.2/32
+#CONFIG_MUSE_WG_PRIVATE_KEY="made by tools/make-wg-config.py"
+# 0 Off, 1 Auto (the tunnel only when something is unreachable), 2 Always. Settings > WireGuard changes it later.
+CONFIG_MUSE_WG_DEFAULT_MODE=1

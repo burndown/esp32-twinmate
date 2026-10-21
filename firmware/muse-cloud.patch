@@ -44,10 +44,10 @@ index 73c8ffa..b80c40f 100644
      # which its Kconfig can't do. Abort, so the panic handler prints a backtrace
      # and reboots. PUBLIC reaches LVGL and every file that includes lvgl.h.
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 1f65257..2cc40f5 100644
+index 1f65257..ed25e4f 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -111,6 +111,124 @@ menu "Muse"
+@@ -111,6 +111,138 @@ menu "Muse"
              depends on IDF_TARGET_ESP32C3
      endchoice
  
@@ -101,6 +101,20 @@ index 1f65257..2cc40f5 100644
 +    config MUSE_WG_ADDRESS
 +        string "This device's address inside the tunnel, e.g. 10.77.0.2"
 +        default ""
++
++    config MUSE_WG_PRIVATE_KEY
++        string "This device's WireGuard private key (base64), made ahead of time by tools/make-wg-config.py"
++        default ""
++        help
++            With the server settings above, a private key set here means the device needs no first-start step: its
++            public key is known before flashing, so the peer can be added on the server beforehand. Empty: the
++            device makes its own key pair at the first start. The key is in the firmware image and in the file that
++            holds this setting: do not commit that file.
++
++    config MUSE_WG_DEFAULT_MODE
++        int "WireGuard mode before anyone changes it in Settings: 0 Off, 1 Auto, 2 Always"
++        range 0 2
++        default 1
 +
 +    config MUSE_HOME_SSID
 +        string "Home Wi-Fi network name (empty: probe the LAN address instead)"
@@ -25285,10 +25299,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..db89bb4
+index 0000000..90bf2e8
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,722 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25337,6 +25351,12 @@ index 0000000..db89bb4
 +#ifndef CONFIG_MUSE_HOME_SSID
 +#define CONFIG_MUSE_HOME_SSID ""
 +#endif
++#ifndef CONFIG_MUSE_WG_PRIVATE_KEY
++#define CONFIG_MUSE_WG_PRIVATE_KEY ""
++#endif
++#ifndef CONFIG_MUSE_WG_DEFAULT_MODE
++#define CONFIG_MUSE_WG_DEFAULT_MODE 1
++#endif
 +#ifndef CONFIG_MUSE_WG_ENDPOINT
 +#define CONFIG_MUSE_WG_ENDPOINT ""
 +#define CONFIG_MUSE_WG_PORT 51820
@@ -25359,7 +25379,7 @@ index 0000000..db89bb4
 +static char s_priv[KEY_B64], s_pub[KEY_B64], s_srv[KEY_B64], s_ep[64], s_addr[20], s_mask[20] = "255.255.255.0";
 +static uint16_t s_port = 51820, s_keep = 25;
 +#ifndef MUSE_WG_DEFAULT_MODE
-+#define MUSE_WG_DEFAULT_MODE MUSE_WG_AUTO
++#define MUSE_WG_DEFAULT_MODE CONFIG_MUSE_WG_DEFAULT_MODE
 +#endif
 +static uint8_t s_mode = MUSE_WG_DEFAULT_MODE;
 +static bool s_configured;
@@ -25395,6 +25415,7 @@ index 0000000..db89bb4
 +/* ---------- storage ---------- */
 +
 +static void make_keys(void);
++static bool use_built_in_key(const char *priv_b64);
 +
 +static void load(void)
 +{
@@ -25425,7 +25446,9 @@ index 0000000..db89bb4
 +        strlcpy(s_addr, CONFIG_MUSE_WG_ADDRESS, sizeof(s_addr));
 +        s_port = CONFIG_MUSE_WG_PORT;
 +        s_static = true;
-+        if (!s_priv[0]) {
++        if (CONFIG_MUSE_WG_PRIVATE_KEY[0] && use_built_in_key(CONFIG_MUSE_WG_PRIVATE_KEY)) {
++            /* the key pair came with the build: nothing is stored, nothing to register at the first start */
++        } else if (!s_priv[0]) {
 +            make_keys();
 +        }
 +    }
@@ -25512,6 +25535,22 @@ index 0000000..db89bb4
 +    save_str("pub", s_pub);
 +    commit();
 +    memset(sk, 0, sizeof(sk));
++}
++
++/* The private key given in the build: decode it, work out the public key and keep both in memory only. */
++static bool use_built_in_key(const char *priv_b64)
++{
++    uint8_t sk[32], pk[32];
++    size_t olen = 0;
++    if (mbedtls_base64_decode(sk, sizeof(sk), &olen, (const unsigned char *)priv_b64, strlen(priv_b64)) != 0 || olen != 32) {
++        ESP_LOGE(TAG, "CONFIG_MUSE_WG_PRIVATE_KEY is not a base64 32-byte key");
++        return false;
++    }
++    crypto_scalarmult_curve25519_base(pk, sk);
++    strlcpy(s_priv, priv_b64, sizeof(s_priv));
++    b64(pk, 32, s_pub, sizeof(s_pub));
++    memset(sk, 0, sizeof(sk));
++    return true;
 +}
 +
 +static bool at_home(void)
