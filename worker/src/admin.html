@@ -49,11 +49,11 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 <h2>语音识别</h2>
 <div class="row">
  <div><label>服务商</label><select id="asr_provider">
-  <option value="cloudflare">Cloudflare Workers AI（Whisper，免费每天约 200 分钟，不需要密钥）</option>
-  <option value="azure">微软 Azure Speech（免费档每月 5 小时，与语音合成同一把密钥）</option></select></div>
+  <option value="cloudflare">Cloudflare Workers AI（Whisper，免费）</option>
+  <option value="azure">微软 Azure Speech</option></select></div>
  <div><label>语言</label><input type="text" id="asr_language" placeholder="zh-CN"></div>
 </div>
-<p class="hint">Cloudflare 的识别需要在 <code>wrangler.toml</code> 里有 <code>[ai]</code> 绑定。</p>
+<p class="hint">Cloudflare：免费每天约 200 分钟，不需要密钥，要在 <code>wrangler.toml</code> 里有 <code>[ai]</code> 绑定。Azure：免费档每月 5 小时，与语音合成同一把密钥。</p>
 <p style="margin:12px 0 0"><button onclick="test('asr')">测试识别</button></p><div class="res" id="res_asr"></div>
 </div>
 
@@ -123,7 +123,16 @@ function fill(d) {
   $("cbhost").textContent = new URL(c.bot.callback_base || ORIGIN).hostname;
   const peers = d.peers || [];
   $("peers").innerHTML = peers.length ? peers.map((p) => '<div class="peer"><b>' + p.ip + "</b> · 申请于 " + new Date(p.at).toLocaleString() +
-    "<code>" + p.cmd + '</code><button onclick="navigator.clipboard.writeText(this.previousSibling.textContent);this.textContent=\'已复制\'">复制命令</button></div>').join("") : "还没有。";
+    "<code>" + p.cmd + '</code><button onclick="copyCmd(this)">复制命令</button></div>').join("") : "还没有。";
+}
+async function copyCmd(btn) {
+  const t = btn.previousSibling.textContent;
+  try { await navigator.clipboard.writeText(t); btn.textContent = "已复制"; }
+  catch (e) {
+    const r = document.createRange(); r.selectNodeContents(btn.previousSibling);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    btn.textContent = document.execCommand("copy") ? "已复制" : "没能自动复制，已选中，请按 ⌘C / Ctrl+C";
+  }
 }
 async function load() {
   const d = await api("/admin/api");

@@ -127,7 +127,7 @@ function stripId3(b) {
 }
 const xmlEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-async function synthAzure(cfg, S, t) {
+async function synthAzure(cfg, S, t, fmt = "audio-16khz-128kbitrate-mono-mp3") {
   if (!S.azure_key) throw new Error("Azure Speech key not set");
   const T = cfg.tts, region = T.region || "eastasia", voice = T.voice || "zh-CN-XiaoxiaoMultilingualNeural";
   const host = region.includes(".") ? region : `${region}.tts.speech.microsoft.com`;
@@ -135,7 +135,7 @@ async function synthAzure(cfg, S, t) {
   const r = await fetch(`https://${host}/cognitiveservices/v1`, {
     method: "POST",
     headers: { "Ocp-Apim-Subscription-Key": S.azure_key, "Content-Type": "application/ssml+xml",
-      "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3", "User-Agent": "muse-gateway" },
+      "X-Microsoft-OutputFormat": fmt, "User-Agent": "muse-gateway" },
     body: `<speak version='1.0' xml:lang='${lang}'><voice name='${voice}'>${xmlEsc(t)}</voice></speak>`,
   });
   if (!r.ok) throw new Error("azure tts http " + r.status + " " + (await r.text().catch(() => "")).slice(0, 120));
@@ -415,8 +415,15 @@ async function admin(req, env, url, all) {
         return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-ms": String(Date.now() - t0), "x-parts": String(parts) } });
       }
       if (service === "asr") {
+        // A real round trip when there is an Azure key: synthesise a sentence as 16 kHz WAV and recognise it.
+        if (all.S.azure_key) {
+          const sentence = "今天北京天气怎么样，需要带伞吗";
+          const wavBytes = await synthAzure(all.cfg, all.S, sentence, "riff-16khz-16bit-mono-pcm");
+          const heard = await recognise(all.cfg, all.S, wavBytes);
+          return json({ ok: true, ms: Date.now() - t0, text: heard || "(空)", note: "用 Azure 合成了一句“" + sentence + "”，再用所选的识别服务识别回来（用时包含合成）" });
+        }
         const heard = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000));   // 1 s of silence
-        return json({ ok: true, ms: Date.now() - t0, text: heard || "(空)", note: "连通和密钥正常。这里发的是 1 秒静音，真实的识别效果以说话为准" });
+        return json({ ok: true, ms: Date.now() - t0, text: heard || "(空)", note: "没有 Azure 密钥，只能发 1 秒静音：这只能说明请求没报错，不能说明识别效果；Cloudflare 的识别对静音不会去调 Whisper" });
       }
       if (service === "bot") {   // one real question to the bot, up to 90 s
         const wait = await botAsk(req, env, all, "请回答：今天是几月几号？");
