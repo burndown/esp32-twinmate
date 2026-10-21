@@ -362,7 +362,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..02aac43 100644
+index 2866f5d..7d80982 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -1118,7 +1118,7 @@ index 2866f5d..02aac43 100644
 +/* One piece of speech as MP3. A piece is at most TTS_TEXT_MAX bytes of text (about 160 characters, about 35 s of speech,
 + * 560 KB at 128 kbps). This was 256 KB (16 s): a longer piece was silently cut off and its last seconds were never
 + * spoken, while the next piece played normally - a sentence went missing in the middle of a reply. */
-+#define TTS_FETCH_MAX (640 * 1024)
++#define TTS_FETCH_MAX (1024 * 1024)   /* about 1.8 times the longest piece (35 s at 128 kbit/s); the buffer is in PSRAM */
 +#define TTS_TEXT_MAX 480                   /* bytes of reply text sent for speech */
 +
 +EXT_RAM_BSS_ATTR static struct {
@@ -25306,10 +25306,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..d7daf95
+index 0000000..527b634
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,747 @@
+@@ -0,0 +1,751 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25509,6 +25509,10 @@ index 0000000..d7daf95
 +
 +void muse_wg_forget(void)
 +{
++    if (s_static) {   /* the server details (and maybe the key) are part of the build: a new key pair would never be registered */
++        set_err("Set by the firmware");
++        return;
++    }
 +    s_priv[0] = s_pub[0] = s_srv[0] = s_ep[0] = s_addr[0] = 0;
 +    s_port = 51820;
 +    s_keep = 25;

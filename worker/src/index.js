@@ -18,10 +18,7 @@ const DEFAULTS = {
 const SECRET_ENV = { azure_key: "AZURE_SPEECH_KEY", grokbot_url: "GROKBOT_URL", grokbot_auth: "GROKBOT_AUTH" };
 const ENV_CONFIG = { "wg.server_pub": "WG_SERVER_PUB", "wg.endpoint": "WG_ENDPOINT", "wg.port": "WG_PORT", "wg.subnet": "WG_SUBNET" };
 
-let AI = null;   // the Workers AI binding of this request ([ai] binding = "AI" in wrangler.toml)
-
 async function loadAll(env) {
-  AI = env.AI || null;
   let over = null, sec = null;
   try { over = env.CFG ? await env.CFG.get("config", "json") : null; } catch (e) { /* defaults */ }
   try { sec = env.CFG ? await env.CFG.get("secrets", "json") : null; } catch (e) { /* env only */ }
@@ -33,7 +30,7 @@ async function loadAll(env) {
   }
   const S = {};
   for (const [name, envName] of Object.entries(SECRET_ENV)) S[name] = (sec && sec[name]) || env[envName] || "";
-  return { cfg, S, stored: sec || {}, over: over || {} };
+  return { cfg, S, stored: sec || {}, over: over || {}, AI: env.AI || null };   // AI: the Workers AI binding of this request ([ai] binding = "AI" in wrangler.toml)
 }
 
 const text = (s, status = 200, type = "text/plain; charset=utf-8") => new Response(s, { status, headers: { "content-type": type } });
@@ -68,7 +65,7 @@ function rms16(wavBytes) {
 // Whisper invents subtitle credits for silence or noise; these are what it says.
 const WHISPER_GHOSTS = /字幕|志愿者|点赞|订阅|谢谢观看|感谢观看|Thanks for watching|Subtitles by/i;
 
-async function recognise(cfg, S, audio) {
+async function recognise(cfg, S, audio, AI) {
   const A = cfg.asr;
   if (A.provider === "azure") {
     // Azure Speech short-audio REST API (60 s at most): the same resource, key and region as speech synthesis.
@@ -100,7 +97,7 @@ async function stt(req, env, all) {
   const pcm = new Uint8Array(await req.arrayBuffer());
   const rate = parseInt(req.headers.get("x-sample-rate") || "16000", 10);
   if (pcm.length < 3200) return json({ text: "" });           // under 0.1 s: nothing to recognise
-  try { return json({ text: await recognise(all.cfg, all.S, wav(pcm, rate)) }); }
+  try { return json({ text: await recognise(all.cfg, all.S, wav(pcm, rate), all.AI) }); }
   catch (e) { console.log("asr", String(e).slice(0, 200)); return json({ error: String(e).slice(0, 200) }, 502); }
 }
 
@@ -368,7 +365,7 @@ async function admin(req, env, url, all) {
   if (p === "/admin/api" && req.method === "GET") {
     const secrets = {};
     for (const n of Object.keys(SECRET_ENV)) secrets[n] = mask(all.S[n]);
-    return json({ config: all.cfg, secrets, peers: await wgList(env), binding: { ai: !!AI, durable: !!env.BOT }, origin: url.origin });
+    return json({ config: all.cfg, secrets, peers: await wgList(env), binding: { ai: !!all.AI, durable: !!env.BOT }, origin: url.origin });
   }
   if (p === "/admin/api" && req.method === "POST") {
     if (!env.CFG) return json({ error: "KV not bound" }, 500);
@@ -419,10 +416,10 @@ async function admin(req, env, url, all) {
         if (all.S.azure_key) {
           const sentence = "今天北京天气怎么样，需要带伞吗";
           const wavBytes = await synthAzure(all.cfg, all.S, sentence, "riff-16khz-16bit-mono-pcm");
-          const heard = await recognise(all.cfg, all.S, wavBytes);
+          const heard = await recognise(all.cfg, all.S, wavBytes, all.AI);
           return json({ ok: true, ms: Date.now() - t0, text: heard || "(空)", note: "用 Azure 合成了一句“" + sentence + "”，再用所选的识别服务识别回来（用时包含合成）" });
         }
-        const heard = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000));   // 1 s of silence
+        const heard = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), all.AI);   // 1 s of silence
         return json({ ok: true, ms: Date.now() - t0, text: heard || "(空)", note: "没有 Azure 密钥，只能发 1 秒静音：这只能说明请求没报错，不能说明识别效果；Cloudflare 的识别对静音不会去调 Whisper" });
       }
       if (service === "bot") {   // one real question to the bot, up to 90 s

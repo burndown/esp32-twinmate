@@ -22,10 +22,7 @@ const SECRET_NAMES = { dashscope_key: "DASHSCOPE_API_KEY", ark_key: "ARK_API_KEY
   custom_key: "CUSTOM_LLM_KEY", volc_appid: "VOLC_APPID", volc_token: "VOLC_TOKEN",
   azure_key: "AZURE_SPEECH_KEY", homebox_token: "HOMEBOX_ASR_TOKEN" };
 
-let AI = null;   // the Workers AI binding of this request, when the Worker has one ([ai] binding = "AI" in wrangler.toml)
-
 async function loadAll(env) {
-  AI = env.AI || null;
   let over = null, sec = null;
   try { over = env.CFG ? await env.CFG.get("config", "json") : null; } catch (e) { /* defaults */ }
   try { sec = env.CFG ? await env.CFG.get("secrets", "json") : null; } catch (e) { /* env only */ }
@@ -33,7 +30,7 @@ async function loadAll(env) {
   for (const k of ["llm", "tts", "asr"]) cfg[k] = { ...DEFAULTS[k], ...((over || {})[k] || {}) };
   const S = {};
   for (const [name, envName] of Object.entries(SECRET_NAMES)) S[name] = (sec && sec[name]) || env[envName] || "";
-  return { cfg, S, stored: sec || {} };
+  return { cfg, S, stored: sec || {}, AI: env.AI || null };   // AI: the Workers AI binding of this request, when the Worker has one
 }
 
 const text = (s, status = 200, type = "text/plain; charset=utf-8") => new Response(s, { status, headers: { "content-type": type } });
@@ -60,7 +57,7 @@ function wav(pcm, rate) {
 
 // ---- ASR ---------------------------------------------------------------------------------------------
 // audio: wav or mp3 bytes. Returns recognised text ("" for silence).
-async function recognise(cfg, S, audio, mime) {
+async function recognise(cfg, S, audio, mime, AI) {
   const A = cfg.asr;
   if (A.provider === "homebox") {
     // The speech server at home (SenseVoice) takes WAV or raw PCM; it is reached through a Cloudflare Tunnel hostname
@@ -129,7 +126,7 @@ async function stt(req, env, all) {
   const pcm = new Uint8Array(await req.arrayBuffer());
   const rate = parseInt(req.headers.get("x-sample-rate") || "16000", 10);
   if (pcm.length < 3200) return json({ text: "" });           // under 0.1 s: nothing to recognise
-  try { return json({ text: await recognise(all.cfg, all.S, wav(pcm, rate), "audio/wav") }); }
+  try { return json({ text: await recognise(all.cfg, all.S, wav(pcm, rate), "audio/wav", all.AI) }); }
   catch (e) { console.log("asr", String(e).slice(0, 200)); return json({ error: String(e).slice(0, 200) }, 502); }
 }
 
@@ -653,12 +650,12 @@ async function admin(req, env, url, all) {
         return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-ms": String(Date.now() - t0), "x-parts": String(parts) } });
       }
       if (service === "asr" && (["homebox", "azure", "cloudflare"].includes(all.cfg.asr.provider))) {
-        const text0 = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), "audio/wav");   // 1 s of silence
+        const text0 = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), "audio/wav", all.AI);   // 1 s of silence
         return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和密钥正常。这里发的是 1 秒静音：SenseVoice 对纯静音会乱猜一个字，Azure 会返回空，Whisper 可能给出一两个字；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
       }
       if (service === "asr") {
         const { audio } = await synthAll(all.cfg, all.S, "今天天气怎么样，需要带伞吗");
-        const heard = await recognise(all.cfg, all.S, stripId3(audio), "audio/mpeg");
+        const heard = await recognise(all.cfg, all.S, stripId3(audio), "audio/mpeg", all.AI);
         return json({ ok: true, ms: Date.now() - t0, text: heard, note: "用语音合成生成一句“今天天气怎么样，需要带伞吗”再识别回来" });
       }
       return json({ error: "unknown service" }, 400);
