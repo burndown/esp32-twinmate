@@ -7,7 +7,7 @@
 - **不用自己的服务器**：识别、语音合成放在你自己的免费 Cloudflare 账号和 Azure 账号上。
 - **三种回答者**：Muse 自己的助手，或一个你接入的 Webhook 机器人（Grok Bot），在圆屏的设置里切换。
 - **连不上 Muse 的网络里也能用**：设备自带 WireGuard，只在需要时连到你自己的一台海外服务器。
-- 眼睛头像（会眨眼、跟着手指和倾斜转动）、可换的头像（包括你自己的圆形图）、等待计时圈、干净的主屏、`display.show_text` 提词器、所有消息推送……（完整列表见 [docs/FIRMWARE.md](docs/FIRMWARE.md)）。
+- 眼睛头像（会眨眼、跟着手指和倾斜转动）、可换的头像（包括你自己的圆形图）、等待计时圈、干净的主屏、`display.show_text` 提词器、所有消息推送……（完整列表见 [docs/FIRMWARE.zh-CN.md](docs/FIRMWARE.zh-CN.md)）。
 
 这是个人项目，不是官方的，没有经过 Meta 审核。使用 Muse 需要你自己的 SDK token，并遵守 [Gadget SDK Terms](https://gadgets.muse.ai)。你的语音和对话内容会发给你选择的云服务商，这与只用 Muse 自己的云不同。
 
@@ -19,8 +19,8 @@
 | `tools/muse-cloud.py` | 读这个配置，一条命令部署网关、一条命令编译（和刷写）固件 |
 | `worker/` | **Cloudflare 网关**（纯云端版）：识别、合成、Grok Bot、WireGuard 登记、头像、设置页 |
 | `firmware/muse-cloud.patch` | 给上游 Muse 固件（提交 `fa07304`）打的补丁 |
-| `worker-home/`、`home/` | 另一种部署：跑在家里服务器上的完整版网关（多家云服务商、本地识别、大模型），见 [docs/HOME-SERVER.md](docs/HOME-SERVER.md) |
-| `docs/` | [GATEWAY.md](docs/GATEWAY.md) 网关细节 · [FIRMWARE.md](docs/FIRMWARE.md) 固件功能和手工编译 · [wireguard-server.md](docs/wireguard-server.md) 搭 WireGuard 服务器 · [HOME-SERVER.md](docs/HOME-SERVER.md) 家里版 |
+| `worker-home/`、`home/` | 另一种部署：跑在家里服务器上的完整版网关（多家云服务商、本地识别、大模型），见 [docs/HOME-SERVER.zh-CN.md](docs/HOME-SERVER.zh-CN.md) |
+| `docs/` | [GATEWAY.md](docs/GATEWAY.zh-CN.md) 网关细节 · [FIRMWARE.md](docs/FIRMWARE.zh-CN.md) 固件功能和手工编译 · [wireguard-server.md](docs/wireguard-server.zh-CN.md) 搭 WireGuard 服务器 · [HOME-SERVER.md](docs/HOME-SERVER.zh-CN.md) 家里版 |
 
 **固件和网关在同一个仓库里**，因为它们是一对：固件和网关之间有一套约定（设备令牌与管理令牌、`/chat` 的 503 和错误标记、`/wg/enroll`、`/avatar`），改一边就要改另一边。放在一起，一次提交就能保持它们互相兼容，你拿到的永远是一对能配合的版本。
 
@@ -50,7 +50,7 @@ flowchart LR
 | Azure | 一个 Speech 资源（免费档 F0 就够）的**密钥**和**区域**（比如 `eastasia`），语音合成用它 |
 | 电脑上 | Python 3.8+、Node.js（脚本通过 `npx wrangler` 部署）、git、[ESP-IDF 6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) |
 | Grok Bot | **可选**。一个接收 Webhook、过一会儿把答案 POST 回来的机器人。不用的话，Answers 里只有 Muse |
-| WireGuard 服务器 | **可选**。只有你的网络连不上 Muse 或 Cloudflare 时才需要：一台海外 Linux 服务器，见 [docs/wireguard-server.md](docs/wireguard-server.md) |
+| WireGuard 服务器 | **可选**。只有你的网络连不上 Muse 或 Cloudflare 时才需要：一台海外 Linux 服务器，见 [docs/wireguard-server.zh-CN.md](docs/wireguard-server.zh-CN.md) |
 
 ### 前置条件怎么拿
 
@@ -58,7 +58,7 @@ flowchart LR
 
 **Muse SDK token**：在 [gadgets.muse.ai](https://gadgets.muse.ai) 登录、接受条款、复制 token。固件编译时会自己检查它：必须正好 48 个字符、以 `mgst_` 开头、最后一个字符是 `A E I M Q U Y c g k o s w 0 4 8` 之一；粘贴错了会报 “CONFIG_GADGET_SDK_TOKEN is not a valid SDK token”。`tools/muse-cloud.py check` 会在编译前就告诉你。
 
-**Cloudflare 账号**：在 [dash.cloudflare.com](https://dash.cloudflare.com) 注册免费账号。不用手工建任何东西：`tools/muse-cloud.py gateway` 会通过浏览器登录、建一个存设置的 KV、部署 Worker。Worker 用到 Workers AI（Whisper）和 Durable Object，免费版都有，限额见 [docs/GATEWAY.md](docs/GATEWAY.md)。
+**Cloudflare 账号**：在 [dash.cloudflare.com](https://dash.cloudflare.com) 注册免费账号。不用手工建任何东西：`tools/muse-cloud.py gateway` 会通过浏览器登录、建一个存设置的 KV、部署 Worker。Worker 用到 Workers AI（Whisper）和 Durable Object，免费版都有，限额见 [docs/GATEWAY.zh-CN.md](docs/GATEWAY.zh-CN.md)。
 
 **Azure Speech 资源**：在 [Azure 门户](https://portal.azure.com) 新建一个 **Speech** 类型的资源（也叫 “Azure AI Speech”，或在 “AI Services” 下），定价层选 **Free F0**，区域选离你近的（比如 `eastasia`、`westeurope`、`eastus`），建好后打开 **Keys and Endpoint**，复制一把密钥。把密钥和区域名（写 `eastasia`，不是网址）填进 `muse-cloud.toml`。免费档每月约 5 小时识别、50 万字符合成，具体数字请以 [Azure 定价页](https://azure.microsoft.com/pricing/details/cognitive-services/speech-services) 为准。
 
@@ -174,7 +174,7 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # 串口名
 
 ## 费用和免费额度
 
-纯云端版是为免费账号设计的，但额度要自己核对最新数字，细节见 [docs/GATEWAY.md](docs/GATEWAY.md)。简单说：Cloudflare Workers 免费版每天 10 万次请求；Workers AI 的 Whisper 每天约 200 分钟；Azure Speech 免费档每月识别 5 小时、合成 50 万字符。一个人日常使用远远够，但“送给很多人”时要注意每个人各部署一份。
+纯云端版是为免费账号设计的，但额度要自己核对最新数字，细节见 [docs/GATEWAY.zh-CN.md](docs/GATEWAY.zh-CN.md)。简单说：Cloudflare Workers 免费版每天 10 万次请求；Workers AI 的 Whisper 每天约 200 分钟；Azure Speech 免费档每月识别 5 小时、合成 50 万字符。一个人日常使用远远够，但“送给很多人”时要注意每个人各部署一份。
 
 ## 安全须知
 
@@ -188,7 +188,7 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # 串口名
 |---|---|
 | 补丁打在干净的上游 `fa07304` 上，用脚本从 `muse-cloud.toml` 生成设置，从零编译，固件里有补丁的功能和新分区 | 通过（2026-10-21，包括 WireGuard 打开的组合） |
 | `tools/muse-cloud.py` 的 `init`、`check`、`gateway`（真实部署到 Cloudflare 免费账号）、`status`、`firmware` | 通过（测试用的 Worker 已删除） |
-| 网关、WireGuard、回答者（Muse、Grok Bot；家里版还有模型）在圆圆上的完整一轮 | 通过，细节见 [docs/GATEWAY.md](docs/GATEWAY.md) 和 [docs/FIRMWARE.md](docs/FIRMWARE.md) |
+| 网关、WireGuard、回答者（Muse、Grok Bot；家里版还有模型）在圆圆上的完整一轮 | 通过，细节见 [docs/GATEWAY.zh-CN.md](docs/GATEWAY.zh-CN.md) 和 [docs/FIRMWARE.zh-CN.md](docs/FIRMWARE.zh-CN.md) |
 | 用脚本的 `firmware --flash` 把纯云端固件刷到圆圆上，圆圆稳定运行，选 Muse 完整一轮（识别用 Cloudflare Whisper，合成用 Azure，都经你自己的 Worker）：1 句 11 个字的问题，Muse 的回答分 20 次取语音，念了 55 秒，整轮 135 秒，设备内部内存最低 12K | 通过（2026-10-21，`wireguard.enabled = false`）。**第一次尝试失败过**：脚本漏了 `CONFIG_ESP_NETIF_BRIDGE_EN`，设备约每 4 秒重启一次，还丢了配对，要在 Muse App 里重新配对；已修（固件自己要求这个选项），第二次通过 |
 | 对一块**擦除过的全新板子**做第一次完整刷机、配对：整片闪存擦成全 0xFF，脚本从零取上游、打补丁、编译、刷机，圆圆进入配对状态；在 Muse App 里配对后，识别、Muse、合成一轮正常（整轮 39 秒，没有重启） | 通过（2026-10-21，同一块圆圆；板子是 Waveshare 1.75C，出厂数据分区本来是空的）。**没有在一块真正的出厂新板子上做过** |
 | 一个没有任何相关经历的人，只照这份文档从零做一遍 | **没有验证** |

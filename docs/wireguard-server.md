@@ -1,6 +1,8 @@
-# WireGuard 服务器（给设备当出口）
+# The WireGuard server (the exit for the device)
 
-下面是在一台 Ubuntu 服务器上搭设备隧道出口的步骤，设备的菜单和网关的 `/wg/enroll` 见 README。
+**English** · [中文](wireguard-server.zh-CN.md)
+
+These are the steps to set up the exit for the device's tunnel on an Ubuntu server. The device's menu and the gateway's `/wg/enroll` are described in the README.
 
 ```bash
 sudo apt-get install -y wireguard-tools
@@ -8,31 +10,31 @@ sudo sh -c 'umask 077; mkdir -p /etc/wireguard; wg genkey > /etc/wireguard/serve
 sudo sh -c 'wg pubkey < /etc/wireguard/server.key > /etc/wireguard/server.pub'
 ```
 
-`/etc/wireguard/wg0.conf`（把 `<私钥>` 换成 `server.key` 的内容，`eth0` 换成出口网卡，权限 600）：
+`/etc/wireguard/wg0.conf` (replace `<private key>` with the contents of `server.key` and `eth0` with the outgoing network interface; permissions 600):
 
 ```ini
 [Interface]
 Address = 10.77.0.1/24
 ListenPort = 51820
-PrivateKey = <私钥>
+PrivateKey = <private key>
 PostUp = iptables -I FORWARD 1 -i wg0 -j ACCEPT; iptables -I FORWARD 1 -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -A POSTROUTING -s 10.77.0.0/24 -o eth0 -j MASQUERADE
 PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -D FORWARD -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.77.0.0/24 -o eth0 -j MASQUERADE
 ```
 
 ```bash
-sudo systemctl enable --now wg-quick@wg0     # 要开 net.ipv4.ip_forward=1
+sudo systemctl enable --now wg-quick@wg0     # needs net.ipv4.ip_forward=1
 ```
 
-网关的 `.dev.vars`（或 Worker 的变量）里写：`WG_SERVER_PUB=<server.pub 的内容>`、`WG_ENDPOINT=<服务器公网 IP 或域名>`。
+In the gateway's `.dev.vars` (or the Worker's variables) put `WG_SERVER_PUB=<the contents of server.pub>` and `WG_ENDPOINT=<the server's public IP or domain name>`. (If you use `tools/muse-cloud.py`, the `[wireguard]` section of `muse-cloud.toml` does this for you.)
 
-批准一台设备：设备申请后，访问网关 `GET /wg/peers?k=令牌`，把里面的 `sudo wg set wg0 peer '…' allowed-ips 10.77.0.N/32` 在服务器上执行；要让它重启后还在，把 `[Peer]` 段（`sudo wg showconf wg0`）追加进 `wg0.conf`。
+To approve a device: after the device has asked, find it in the WireGuard section of the settings page (or, with the **admin token**, call the gateway's `GET /wg/peers?k=<admin token>`), run `sudo wg set wg0 peer '…' allowed-ips 10.77.0.N/32` on the server, and then press "mark as approved" on the settings page. For it to survive a reboot, append the `[Peer]` section (`sudo wg showconf wg0`) to `wg0.conf`.
 
-注意：设备的 UDP 包只用 Wi-Fi 网卡发，所以服务器的 `ListenPort` 要对外开放；一台服务器不能同时是家里网络的路由器，因为设备走隧道时所有新连接都从服务器出去。
+Note: the device sends its UDP packets only through the Wi-Fi interface, so the server's `ListenPort` must be open to the outside (also in your hosting provider's firewall, if it has one). One server cannot also be the router of your home network, because while the device uses the tunnel every new connection leaves through the server.
 
-## 不经过网关配置设备
+## Configuring the device without the gateway
 
-在固件的 Kconfig 里设置 `MUSE_WG_ENDPOINT`、`MUSE_WG_PORT`、`MUSE_WG_SERVER_KEY`（`server.pub` 的内容）和 `MUSE_WG_ADDRESS`（这台设备在隧道里的地址，例如 `10.77.0.2`）。刷机后设备会生成自己的密钥对，在设置 → WireGuard 页和开机日志里能看到公钥，然后在服务器上执行 `sudo wg set wg0 peer '<公钥>' allowed-ips 10.77.0.2/32`。网关不需要 `WG_SERVER_PUB` 和 `WG_ENDPOINT`。
+Set `MUSE_WG_ENDPOINT`, `MUSE_WG_PORT`, `MUSE_WG_SERVER_KEY` (the contents of `server.pub`) and `MUSE_WG_ADDRESS` (this device's address inside the tunnel, for example `10.77.0.2`) in the firmware's Kconfig. After flashing, the device makes its own key pair; you can read the public key on the Settings → WireGuard page and in the boot log, and then run `sudo wg set wg0 peer '<public key>' allowed-ips 10.77.0.2/32` on the server. The gateway then does not need `WG_SERVER_PUB` and `WG_ENDPOINT`.
 
-## 刷机前就生成密钥
+## Making the key before flashing
 
-`tools/make-wg-config.py --address 10.77.0.2 --server-key <server.pub 的内容> --endpoint <服务器地址> --append my-cloud.defaults` 生成这台设备的密钥对，把含私钥的配置追加进 `my-cloud.defaults`（权限 600，不要提交），并打印服务器上要执行的 `sudo wg set …` 一行。先在服务器上执行，再刷机，设备开机就连得上。
+`tools/make-wg-config.py --address 10.77.0.2 --server-key <the contents of server.pub> --endpoint <the server's address> --append my-cloud.defaults` makes this device's key pair, appends the settings including the private key to `my-cloud.defaults` (permissions 600; do not commit it), and prints the `sudo wg set …` line to run on the server. Run that on the server first and flash afterwards, and the device connects as soon as it boots. (`tools/muse-cloud.py firmware` does the same thing for you when `[wireguard] enabled = true`.)

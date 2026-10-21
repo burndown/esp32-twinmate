@@ -7,11 +7,11 @@ Add-ons for Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-
 - **No server of your own.** Speech recognition and speech synthesis run on your own free Cloudflare and Azure accounts.
 - **Several ways to answer.** Muse's own assistant, or a Webhook bot you connect (called the "Grok Bot" here). You switch between them in the device's settings.
 - **Use it where Muse is blocked.** The device has a WireGuard client built in and connects to a server of yours only when it has to.
-- Also in the firmware: an eyes avatar that blinks and follows your finger and the tilt of the board, a choice of avatars (including a picture of your own), a waiting ring, a clean main screen, a `display.show_text` teleprompter, and spoken push messages. The full list is in [docs/FIRMWARE.md](docs/FIRMWARE.md) (Chinese).
+- Also in the firmware: an eyes avatar that blinks and follows your finger and the tilt of the board, a choice of avatars (including a picture of your own), a waiting ring, a clean main screen, a `display.show_text` teleprompter, and spoken push messages. The full list is in [docs/FIRMWARE.md](docs/FIRMWARE.md).
 
 This is a personal project, not an official one, and Meta has not reviewed it. Using Muse needs your own SDK token and you must follow the [Gadget SDK Terms](https://gadgets.muse.ai). Your voice and conversations go to the cloud services you choose, which is different from using Muse's own cloud alone.
 
-> **Language of the documents.** This README is in English and in Chinese. The pages under `docs/` are in Chinese only for now. The settings file `muse-cloud.example.toml` and the tool `tools/muse-cloud.py` are in English.
+> **Languages.** This README and every page under `docs/` come in English and in Chinese (`*.zh-CN.md`). The settings file `muse-cloud.example.toml` and the tool `tools/muse-cloud.py` are in English. The sentences the gateway makes the device speak (for example the acknowledgement before the Grok Bot answers) are fixed Chinese strings in `worker/src/index.js`; see [docs/GATEWAY.md](docs/GATEWAY.md) if you use another language.
 
 ## What is in this repository
 
