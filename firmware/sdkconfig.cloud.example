@@ -16,3 +16,6 @@ CONFIG_MUSE_BRAIN_GIVEUP_SECONDS=60
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 # The WireGuard tunnel needs esp_netif to keep its pointer in the netif client data (otherwise adding the tunnel netif crashes)
 CONFIG_ESP_NETIF_BRIDGE_EN=y
+#
+# Cloud-only profile (no language model on the gateway): only Muse and the Grok Bot answer, failures are shown as errors.
+#CONFIG_MUSE_MODEL_ANSWERS=n

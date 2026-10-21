@@ -44,10 +44,10 @@ index 73c8ffa..b80c40f 100644
      # which its Kconfig can't do. Abort, so the panic handler prints a backtrace
      # and reboots. PUBLIC reaches LVGL and every file that includes lvgl.h.
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 1f65257..a15fa95 100644
+index 1f65257..e96ae38 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -111,6 +111,80 @@ menu "Muse"
+@@ -111,6 +111,92 @@ menu "Muse"
              depends on IDF_TARGET_ESP32C3
      endchoice
  
@@ -124,6 +124,18 @@ index 1f65257..a15fa95 100644
 +            brain steps aside). If Muse sends nothing back within this many seconds,
 +            the request to Muse is cancelled and the brain is asked again as its
 +            fallback. Muse itself often needs 10 to 30 s for the first words.
++
++    # Local addition: the gateway's language model as an answerer and as the safety net.
++    config MUSE_MODEL_ANSWERS
++        bool "Offer the gateway's language model as an answerer, and let it take over when Muse or the bot fails"
++        default y
++        depends on MUSE_BRAIN_URL != ""
++        help
++            On (the default): Settings > Answers offers Muse, the Grok Bot and the model, and the model answers
++            when Muse is unreachable or silent or the bot does not respond.
++            Off: only Muse and the Grok Bot are offered, Muse is asked directly (the gateway is not involved),
++            and a failure is shown as an error instead of another answerer taking over. Use this when the
++            gateway has no language model configured.
 +
      config MUSE_ENABLED
          bool
@@ -304,7 +316,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..8b58286 100644
+index 2866f5d..680de67 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -400,7 +412,7 @@ index 2866f5d..8b58286 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1027,507 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1027,518 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -603,6 +615,12 @@ index 2866f5d..8b58286 100644
 +    vTaskDeleteWithCaps(nullptr);   /* its stack is in PSRAM */
 +}
 +
++#ifdef CONFIG_MUSE_MODEL_ANSWERS
++static constexpr bool kModel = true;
++#else
++static constexpr bool kModel = false;   /* only Muse and the Grok Bot answer, and failures are errors */
++#endif
++
 +static bool brain_start(const char *text, bool muse_down = false)
 +{
 +    if (!CONFIG_MUSE_BRAIN_URL[0]) {
@@ -679,6 +697,10 @@ index 2866f5d..8b58286 100644
 +        turn_fail("CAN'T REACH MY BRAIN OR MUSE");   /* the retry failed too: nothing left to try */
 +        return;
 +    }
++    if (!kModel) {
++        turn_fail("GROK BOT DIDN'T ANSWER");   /* no other answerer takes over */
++        return;
++    }
 +    /* The brain stepped aside or didn't answer: Muse gets the same text. */
 +    ESP_LOGW(TAG, "brain gave no reply, asking Muse instead");
 +    s_turn.brain = false;
@@ -706,7 +728,7 @@ index 2866f5d..8b58286 100644
 +
 +static bool brain_retry_after_silence(void)
 +{
-+    if (!s_turn.local_stt || s_turn.brain || s_turn.nmsgs || !CONFIG_MUSE_BRAIN_URL[0] || s_brain.muse_down ||
++    if (!kModel || !s_turn.local_stt || s_turn.brain || s_turn.nmsgs || !CONFIG_MUSE_BRAIN_URL[0] || s_brain.muse_down ||
 +        now_us() - s_turn.chat_us < MUSE_GIVEUP_US) {
 +        return false;
 +    }
@@ -874,7 +896,8 @@ index 2866f5d..8b58286 100644
 +    strlcpy(heard, s_stt.text, sizeof(heard));
 +    ESP_LOGI(TAG, "heard: \"%s\"", heard);
 +    emit(MUSE_HATCH_EV_HEARD, heard);   /* shown even if Muse can't be reached */
-+    if (brain_start(heard)) {
++    /* Muse chosen and no model to fall back on: no need to ask the gateway first, Muse gets the text. */
++    if ((kModel || muse_settings_away_mode() != 0) && brain_start(heard)) {
 +        mark(M_SENT);
 +        emit(MUSE_HATCH_EV_SENT, nullptr);   /* the note counts as delivered: no saved copy to retry */
 +        s_turn.brain = true;
@@ -910,7 +933,7 @@ index 2866f5d..8b58286 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1729,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1740,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -946,7 +969,7 @@ index 2866f5d..8b58286 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1949,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +1960,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -1004,7 +1027,7 @@ index 2866f5d..8b58286 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2013,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2024,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -1028,7 +1051,7 @@ index 2866f5d..8b58286 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2102,248 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2113,248 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1294,7 +1317,7 @@ index 2866f5d..8b58286 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2403,39 @@ static void decode(void)
+@@ -1598,6 +2414,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1334,7 +1357,7 @@ index 2866f5d..8b58286 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2515,9 @@ static void check_turn(void)
+@@ -1677,6 +2526,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1344,7 +1367,7 @@ index 2866f5d..8b58286 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2726,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2737,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1359,7 +1382,7 @@ index 2866f5d..8b58286 100644
 +        for (int i = 0; i < s_turn.nmsgs; i++) {
 +            message_done(i, nullptr);
 +        }
-+    } else if (waiting && CONFIG_MUSE_BRAIN_URL[0] && !s_brain.muse_down) {
++    } else if (waiting && kModel && CONFIG_MUSE_BRAIN_URL[0] && !s_brain.muse_down) {
 +        /* Nothing arrived yet: ask the brain's fallback provider, as when Muse stays silent. */
 +        ESP_LOGW(TAG, "Muse connection lost (%s) before any reply, asking the brain's fallback provider", why);
 +        s_turn.brain = true;          /* from here on Muse's events are ignored (see on_event) */
@@ -1373,7 +1396,7 @@ index 2866f5d..8b58286 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2799,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2810,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1386,7 +1409,7 @@ index 2866f5d..8b58286 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2818,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2829,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1396,7 +1419,7 @@ index 2866f5d..8b58286 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2827,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2838,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1425,7 +1448,7 @@ index 2866f5d..8b58286 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2871,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2882,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1434,7 +1457,7 @@ index 2866f5d..8b58286 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2889,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2900,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1444,7 +1467,7 @@ index 2866f5d..8b58286 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +2997,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +3008,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1461,7 +1484,7 @@ index 2866f5d..8b58286 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3039,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3050,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
@@ -24127,7 +24150,7 @@ index 0000000..b6d14a0
 +}
 +#endif
 diff --git a/esp32/components/muse/muse_settings.c b/esp32/components/muse/muse_settings.c
-index 4b0dda9..7c90426 100644
+index 4b0dda9..4428b37 100644
 --- a/esp32/components/muse/muse_settings.c
 +++ b/esp32/components/muse/muse_settings.c
 @@ -34,6 +34,10 @@ static const char *TAG = "muse_settings";
@@ -24171,18 +24194,26 @@ index 4b0dda9..7c90426 100644
      load_u8("mic_gain", &s.mic_gain);
      load_u8("bright", &s.brightness);
      nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
-@@ -149,6 +169,10 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
+@@ -149,6 +169,18 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
  
  int muse_settings_volume(void) { return s.volume; }
  bool muse_settings_speaker_on(void) { return s.speaker_on; }
 +bool muse_settings_pushes_on(void) { return s.pushes_on; }
 +bool muse_settings_eyes_on(void) { return s.avatar == 0; }
 +int muse_settings_avatar(void) { return s.avatar; }
-+int muse_settings_away_mode(void) { return s.away_mode; }
++int muse_settings_away_mode(void)
++{
++#ifndef CONFIG_MUSE_MODEL_ANSWERS
++    if (s.away_mode == 2) {
++        return 0;   /* the model is not offered in this build */
++    }
++#endif
++    return s.away_mode;
++}
  int muse_settings_mic_gain(void) { return s.mic_gain; }
  int muse_settings_brightness(void) { return s.brightness; }
  int muse_settings_sleep_s(void) { return s.sleep_s; }
-@@ -205,6 +229,32 @@ void muse_settings_set_speaker_on(bool on)
+@@ -205,6 +237,32 @@ void muse_settings_set_speaker_on(bool on)
      notify(MUSE_SETTING_SPEAKER);
  }
  
@@ -24250,7 +24281,7 @@ index 705a5cb..972ca0d 100644
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..206e978 100644
+index 6a372ac..ce8dc31 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
 @@ -31,12 +31,14 @@
@@ -24317,7 +24348,7 @@ index 6a372ac..206e978 100644
      s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
-@@ -1144,6 +1154,157 @@ static void tick_sleep(void)
+@@ -1144,6 +1154,162 @@ static void tick_sleep(void)
      }
  }
  
@@ -24372,6 +24403,11 @@ index 6a372ac..206e978 100644
 +
 +/* ---------- Away ---------- */
 +
++#ifdef CONFIG_MUSE_MODEL_ANSWERS
++#define ANSWER_ROWS 3
++#else
++#define ANSWER_ROWS 2   /* Muse and the Grok Bot only */
++#endif
 +static lv_obj_t *s_away_checks[3];
 +
 +static void on_away_choice(lv_event_t *e)
@@ -24391,17 +24427,17 @@ index 6a372ac..206e978 100644
 +    lv_obj_t *list;
 +    s_away = page(tile, "ANSWERS", true, &list);
 +    note(list, "Your questions go to:");
-+    for (int i = 0; i < 3; i++) {
++    for (int i = 0; i < ANSWER_ROWS; i++) {
 +        row(list, NULL, NAMES[i], &s_away_checks[i], on_away_choice, (void *)(intptr_t)i);
 +        lv_obj_set_style_text_color(s_away_checks[i], lv_color_hex(COLOR_ACCENT), 0);
 +    }
-+    note(list, "Away from home, Muse is reached through WireGuard; the Grok Bot and Gemini go through the home server. Speech and recognition never use the tunnel.");
++    note(list, "Away from home, Muse is reached through WireGuard; the Grok Bot and the model go through the gateway. Speech and recognition never use the tunnel.");
 +}
 +
 +static void tick_away(void)
 +{
 +    int cur = muse_settings_away_mode();
-+    for (int i = 0; i < 3; i++) {
++    for (int i = 0; i < ANSWER_ROWS; i++) {
 +        set_text(s_away_checks[i], cur == i ? LV_SYMBOL_OK : "");
 +    }
 +}
@@ -24475,7 +24511,7 @@ index 6a372ac..206e978 100644
  /* ---------- Battery ---------- */
  
  static void on_battery_reset(lv_event_t *e)
-@@ -1287,6 +1448,9 @@ static const page_t BLE = { &s_ble, build_ble_page };
+@@ -1287,6 +1453,9 @@ static const page_t BLE = { &s_ble, build_ble_page };
  static const page_t SOUND = { &s_sound, build_sound_page };
  static const page_t SLEEP = { &s_sleep, build_sleep_page };
  static const page_t BATTERY = { &s_battery, build_battery_page };
@@ -24485,7 +24521,7 @@ index 6a372ac..206e978 100644
  static const page_t POWER = { &s_power, build_power_page };
  
  static void build_home(lv_obj_t *tile)
-@@ -1297,6 +1461,9 @@ static void build_home(lv_obj_t *tile)
+@@ -1297,6 +1466,9 @@ static void build_home(lv_obj_t *tile)
      row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
      row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
      row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
@@ -24495,7 +24531,7 @@ index 6a372ac..206e978 100644
      row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
      row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
      if (muse_board->power_off) {
-@@ -1325,6 +1492,9 @@ static void tick_home(void)
+@@ -1325,6 +1497,9 @@ static void tick_home(void)
      } else {
          set_text(s_home_sound, "Muted");
      }
@@ -24505,7 +24541,7 @@ index 6a372ac..206e978 100644
      set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
  
      muse_power_t p = muse_state_power();
-@@ -1376,6 +1546,12 @@ void muse_settings_ui_tick(bool visible)
+@@ -1376,6 +1551,12 @@ void muse_settings_ui_tick(bool visible)
          tick_sound();
      } else if (s_current == s_sleep) {
          tick_sleep();

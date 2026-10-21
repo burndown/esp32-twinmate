@@ -71,6 +71,23 @@ async function recognise(cfg, S, audio, mime) {
     const d = await r.json();
     return (d.text || "").trim();
   }
+  if (A.provider === "azure") {
+    // Azure Speech short-audio REST API: the same resource, key and region as Azure text-to-speech (60 s of audio at most).
+    if (!S.azure_key) throw new Error("Azure Speech key not set");
+    if (mime !== "audio/wav") throw new Error("Azure ASR takes WAV only");
+    const region = cfg.tts.region || "eastasia";
+    const host = region.includes(".") ? region.replace(".tts.", ".stt.") : `${region}.stt.speech.microsoft.com`;
+    const lang = A.language || "zh-CN";
+    const r = await fetch(`https://${host}/speech/recognition/conversation/cognitiveservices/v1?language=${encodeURIComponent(lang)}&format=simple`, {
+      method: "POST",
+      headers: { "Ocp-Apim-Subscription-Key": S.azure_key, "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000", Accept: "application/json" },
+      body: audio });
+    if (!r.ok) throw new Error("azure asr http " + r.status);
+    const d = await r.json();
+    if (d.RecognitionStatus === "NoMatch" || d.RecognitionStatus === "InitialSilenceTimeout") return "";
+    if (d.RecognitionStatus !== "Success") throw new Error("azure asr " + d.RecognitionStatus);
+    return (d.DisplayText || "").trim();
+  }
   if (A.provider === "volcengine") {
     if (!S.volc_appid || !S.volc_token) throw new Error("volcengine speech app id / token not set");
     const r = await fetch(VOLC_SPEECH + "/api/v3/auc/bigmodel/recognize/flash", {
@@ -563,9 +580,9 @@ async function admin(req, env, url, all) {
         const { audio, parts } = await synthAll(all.cfg, all.S, "你好，我是圆圆。这是一段语音合成的测试，如果你能听到我说话，说明这项服务已经配置好了。");
         return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-ms": String(Date.now() - t0), "x-parts": String(parts) } });
       }
-      if (service === "asr" && all.cfg.asr.provider === "homebox") {
+      if (service === "asr" && (all.cfg.asr.provider === "homebox" || all.cfg.asr.provider === "azure")) {
         const text0 = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), "audio/wav");   // 1 s of silence
-        return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和令牌正常。这里发的是 1 秒静音，SenseVoice 对纯静音会乱猜一个字，属正常现象；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
+        return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和密钥正常。这里发的是 1 秒静音：SenseVoice 对纯静音会乱猜一个字，Azure 会返回空；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
       }
       if (service === "asr") {
         const { audio } = await synthAll(all.cfg, all.S, "今天天气怎么样，需要带伞吗");
