@@ -14,3 +14,5 @@ CONFIG_MUSE_BRAIN_GIVEUP_SECONDS=60
 # Cloud-only layout instead: point all three at the Cloudflare Worker (https://YOUR-WORKER.workers.dev/...). Cloudflare serves
 # a GlobalSign cross-signed Google Trust Services chain; without the next line the TLS handshake fails (-0x3000).
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+# The WireGuard tunnel needs esp_netif to keep its pointer in the netif client data (otherwise adding the tunnel netif crashes)
+CONFIG_ESP_NETIF_BRIDGE_EN=y

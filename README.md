@@ -129,6 +129,8 @@ printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .
 - **等待计时圈**：松手就开始计时，周围的圈 60 秒画满；等待期间回到思考状态，答案念出来时清零。
 - **主屏干净**：状态图标、状态文字、喇叭按钮和按键提示平时隐藏，碰一下屏幕淡入，4 秒后淡出；隐藏期间点不到这些控件，第一下碰屏幕让它们出现，下一下才能操作。
 - **不在家时不再后台试连 Muse**：设置了 `MUSE_HOME_SSID` 且连着别的 Wi-Fi 时，VM 会话、令牌刷新、Noise 会话和聊天会话的后台重连都暂停，回到家里的 Wi-Fi 后恢复。开机时连上 Wi-Fi 之前那一次试连无法避免。
+- **WireGuard 隧道**（设置 → WireGuard：Off / Auto / Always）：给连不上 Muse 服务器的网络用。Auto 下，设备在联网后快速 TCP 连一下 Muse 的服务器，连得上就直连，连不上才拉起隧道；Always 一直走隧道；在 `MUSE_HOME_SSID` 那个 Wi-Fi 上 Auto 永远不走隧道。隧道起来后所有新连接都从服务器出去，域名也改由隧道里的 1.1.1.1 / 8.8.8.8 解析（路由器的 DNS 可能返回假地址或被污染的答案），换网络时重新判断。用的是 ESP-IDF 组件 [esphome/wireguard](https://components.espressif.com/components/esphome/wireguard)（BSD-3）。**配置不用在圆屏上输密钥**：设备自己生成密钥对（私钥不离开设备），向网关 `POST /wg/enroll` 提交公钥，网关回服务器公钥、地址和分给它的隧道 IP；没配置时设备会自己申请，菜单里的 Get config 可以重新申请，Forget 清掉。最后一步由人在 WireGuard 服务器上批准这把公钥：`GET /wg/peers` 会列出申请过的公钥和对应的 `wg set` 命令。网关要设 `WG_SERVER_PUB`、`WG_ENDPOINT`（服务器公网地址）、可选 `WG_PORT`、`WG_SUBNET`（默认 `10.77.0.`）。服务器端的搭法见 `docs/wireguard-server.md`。已在 Waveshare 1.75C 上、家里的 Wi-Fi、Always 模式下验证过：握手、解析出真实地址、连上 Muse。**Auto 模式在真正连不上 Muse 的外网（热点）里的判断，还没有实测。**
+- **主页形象**（设置 → Avatar：Eyes / Pixel Muse / Picture）：Picture 是你自己的一张圆形图（233×233 RGB565，存在新增的 `avatar` 分区里，需要刷一次分区表）。`tools/make-avatar-img.py 照片.jpg` 裁成圆形并转成设备格式，`GW_AVATAR_URL='http://网关:8787/avatar/set?k=令牌' ... --upload` 传到网关（只在局域网，公网转发不放行 `/avatar/set`），设备上点 Get picture 下载。没有图片时选 Picture 会显示眼睛。
 - **取语音缓冲 640 KB**。这个补丁早期版本里单段语音缓冲只有 256 KB（128 kbps 下 16 秒），超长的一句话会被无声截掉尾巴，下一段照常播放，听起来就是"丢了中间一句话"；现在够装下一段最长的语音，并且万一再被截断会在日志里报警。
 
 ```bash

@@ -442,6 +442,62 @@ async function tts(req, env, all) {
   }
 }
 
+
+// ---- WireGuard enrolment -----------------------------------------------------------------------------
+// The device makes its own key pair and POSTs the public key here. It gets back the server's public key,
+// the endpoint and a tunnel address (one per key, kept in KV). Nothing works until a person adds the key on
+// the WireGuard server: GET /wg/peers?k=... prints the `wg set` lines for the keys that asked.
+async function wgEnroll(req, env) {
+  if (!env.CFG || !env.WG_SERVER_PUB || !env.WG_ENDPOINT) return json({ error: "wireguard not set up" }, 503);
+  const { pub } = await req.json().catch(() => ({}));
+  if (typeof pub !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(pub)) return json({ error: "bad key" }, 400);
+  const base = env.WG_SUBNET || "10.77.0.";
+  let peer = await env.CFG.get("wg:p:" + pub, "json");
+  if (!peer) {
+    const n = (parseInt(await env.CFG.get("wg:next")) || 2);
+    if (n > 250) return json({ error: "no addresses left" }, 507);
+    peer = { ip: base + n, at: new Date().toISOString() };
+    await env.CFG.put("wg:p:" + pub, JSON.stringify(peer));
+    await env.CFG.put("wg:next", String(n + 1));
+    const list = (await env.CFG.get("wg:list", "json")) || [];
+    list.push(pub);
+    await env.CFG.put("wg:list", JSON.stringify(list));
+  }
+  return json({ server_pub: env.WG_SERVER_PUB, endpoint: env.WG_ENDPOINT, port: parseInt(env.WG_PORT) || 51820,
+    address: peer.ip, netmask: "255.255.255.0", keepalive: 25, now: Math.floor(Date.now() / 1000) });
+}
+
+async function wgPeers(env) {
+  const list = (env.CFG && (await env.CFG.get("wg:list", "json"))) || [];
+  const lines = [];
+  for (const pub of list) {
+    const p = await env.CFG.get("wg:p:" + pub, "json");
+    if (p) lines.push(`sudo wg set wg0 peer '${pub}' allowed-ips ${p.ip}/32   # asked ${p.at}`);
+  }
+  return text(lines.join("\n") + "\n");
+}
+
+
+// ---- avatar picture ---------------------------------------------------------------------------------
+// One picture for the round screen: 16-byte header ("MAV1", width, height, byte count) + RGB565 pixels, made by
+// tools/make-avatar-img.py. POST /avatar sends it to the device; POST /avatar/set stores a new one (LAN only: the
+// public proxy does not pass it).
+async function avatarGet(env) {
+  const b = env.CFG && (await env.CFG.get("avatar", "arrayBuffer"));
+  if (!b) return json({ error: "no picture" }, 404);
+  return new Response(b, { headers: { "content-type": "application/octet-stream", "content-length": String(b.byteLength) } });
+}
+
+async function avatarSet(req, env) {
+  const b = await req.arrayBuffer();
+  const v = new DataView(b);
+  if (b.byteLength < 16 || v.getUint32(0, true) !== 0x3156414d) return json({ error: "not a MAV1 picture" }, 400);
+  const w = v.getUint16(4, true), h = v.getUint16(6, true), n = v.getUint32(8, true);
+  if (w > 240 || h > 240 || n !== w * h * 2 || b.byteLength !== 16 + n) return json({ error: "bad size" }, 400);
+  await env.CFG.put("avatar", b);
+  return json({ ok: true, w, h, bytes: n });
+}
+
 // ---- admin ---------------------------------------------------------------------------------------------
 const mask = (v) => (v ? "已设置 ••••" + v.slice(-4) : "");
 
@@ -529,8 +585,12 @@ export default {
     const all = await loadAll(env);
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
+      if (url.pathname === "/wg/peers" && req.method === "GET") return await wgPeers(env);
       if (url.pathname === "/health") return json({ ok: true, muse_mode: !!all.cfg.muse_mode, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
       if (req.method !== "POST") return text("method", 405);
+      if (url.pathname === "/avatar") return await avatarGet(env);
+      if (url.pathname === "/avatar/set") return await avatarSet(req, env);
+      if (url.pathname === "/wg/enroll") return await wgEnroll(req, env);
       if (url.pathname === "/stt") return await stt(req, env, all);
       if (url.pathname === "/chat") return await chat(req, env, all, ctx);
       if (url.pathname === "/tts") return await tts(req, env, all);

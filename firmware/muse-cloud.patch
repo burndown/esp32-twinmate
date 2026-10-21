@@ -1,17 +1,19 @@
 diff --git a/esp32/components/muse/CMakeLists.txt b/esp32/components/muse/CMakeLists.txt
-index 73c8ffa..6554edd 100644
+index 73c8ffa..b80c40f 100644
 --- a/esp32/components/muse/CMakeLists.txt
 +++ b/esp32/components/muse/CMakeLists.txt
-@@ -29,6 +29,8 @@ if(CONFIG_MUSE_ENABLED)
+@@ -29,6 +29,10 @@ if(CONFIG_MUSE_ENABLED)
          "muse_state.c"
          "muse_battery.c"
          "muse_ui.c"
 +        "muse_eyes.cpp"
 +        "muse_imu.cpp"
++        "muse_wg.c"
++        "muse_photo.c"
          "muse_audio.c"
          "muse_pmu.c"
          "muse_input.c"
-@@ -38,6 +40,7 @@ if(CONFIG_MUSE_ENABLED)
+@@ -38,6 +42,7 @@ if(CONFIG_MUSE_ENABLED)
          "muse_settings.c"
          "muse_settings_ui.c"
          "muse_text.c"
@@ -19,6 +21,28 @@ index 73c8ffa..6554edd 100644
          "muse_keypad.c"
          "muse_lv_mem.c"
          "muse_link.c"
+@@ -124,9 +129,9 @@ endif()
+ set(muse_priv_requires
+     esp_timer esp_driver_usb_serial_jtag esp_psram nvs_flash esp_pm esp_event esp_netif
+     bt esp-tls mbedtls esp_app_format esp_http_client
+-    noise_core minimp3
++    noise_core minimp3 esphome__wireguard esphome__libsodium
+     esp_lcd esp_adc esp_driver_i2s esp_driver_ledc esp_driver_spi esp_driver_uart esp_wifi
+-    esp_driver_pcnt)
++    esp_driver_pcnt esp_partition)
+ list(APPEND muse_priv_requires camera)
+ 
+ idf_component_register(
+@@ -140,6 +145,9 @@ idf_component_register(
+ )
+ 
+ if(CONFIG_MUSE_ENABLED)
++    # WireGuard keeps one allowed address per peer unless told otherwise; the tunnel needs its own address and 0.0.0.0/0.
++    idf_component_get_property(wg_lib esphome__wireguard COMPONENT_LIB)
++    target_compile_definitions(${wg_lib} PRIVATE CONFIG_WIREGUARD_MAX_SRC_IPS=2)
+     # LVGL spins forever on a failed assert unless LV_ASSERT_HANDLER is set,
+     # which its Kconfig can't do. Abort, so the panic handler prints a backtrace
+     # and reboots. PUBLIC reaches LVGL and every file that includes lvgl.h.
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
 index 1f65257..a15fa95 100644
 --- a/esp32/components/muse/Kconfig
@@ -213,6 +237,38 @@ index e7d0ef0..17ac3cc 100644
      const esp_lv_adapter_draw_bitmap_callbacks_t draw_cbs = { .custom_draw_bitmap = queue_band };
      esp_lv_adapter_set_draw_bitmap_callbacks(s_disp, &draw_cbs, NULL);
      return s_disp;
+diff --git a/esp32/components/muse/idf_component.yml b/esp32/components/muse/idf_component.yml
+index a3b618e..8669e57 100644
+--- a/esp32/components/muse/idf_component.yml
++++ b/esp32/components/muse/idf_component.yml
+@@ -16,6 +16,7 @@ dependencies:
+   idf:
+     version: ">=5.5"
+   espressif/cjson: "~1.7"
++  esphome/wireguard: "^0.4.8"
+   lvgl/lvgl:
+     version: "9.5.0"
+     public: true
+diff --git a/esp32/components/muse/muse_app.c b/esp32/components/muse/muse_app.c
+index 2810bd2..b13e5fc 100644
+--- a/esp32/components/muse/muse_app.c
++++ b/esp32/components/muse/muse_app.c
+@@ -30,6 +30,7 @@
+ #include "muse_state.h"
+ #include "muse_ui.h"
+ #include "muse_voice.h"
++#include "muse_wg.h"
+ #include "muse_wifi.h"
+ 
+ static const char *TAG = "muse";
+@@ -90,6 +91,7 @@ void muse_app_run(const muse_board_t *board)
+     }
+ 
+     muse_hatch_start();
++    muse_wg_start();
+     /* Home Link owns the radios; these just hand it the saved settings. */
+     muse_wifi_apply();
+     muse_ble_apply();
 diff --git a/esp32/components/muse/muse_chat.h b/esp32/components/muse/muse_chat.h
 index b10e9d8..52ddca1 100644
 --- a/esp32/components/muse/muse_chat.h
@@ -23752,20 +23808,334 @@ index 0000000..e6cb900
 +    }
 +    return ok;
 +}
+diff --git a/esp32/components/muse/muse_photo.c b/esp32/components/muse/muse_photo.c
+new file mode 100644
+index 0000000..47c7c60
+--- /dev/null
++++ b/esp32/components/muse/muse_photo.c
+@@ -0,0 +1,270 @@
++/* See muse_photo.h. */
++
++#include "muse_photo.h"
++
++#include <stdio.h>
++#include <string.h>
++
++#include "esp_crt_bundle.h"
++#include "esp_heap_caps.h"
++#include "esp_http_client.h"
++#include "esp_log.h"
++#include "esp_partition.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++
++static const char *TAG = "muse_photo";
++
++#ifndef CONFIG_MUSE_BRAIN_URL
++#define CONFIG_MUSE_BRAIN_URL ""
++#endif
++#ifndef CONFIG_MUSE_BRAIN_FALLBACK_URL
++#define CONFIG_MUSE_BRAIN_FALLBACK_URL ""
++#endif
++#ifndef CONFIG_MUSE_HOME_SSID
++#define CONFIG_MUSE_HOME_SSID ""
++#endif
++
++#define MAGIC 0x3156414dU   /* "MAV1" */
++#define HDR 16
++#define MAX_PX 240
++
++typedef struct {
++    uint32_t magic;
++    uint16_t w, h;
++    uint32_t bytes;
++    uint32_t reserved;
++} hdr_t;
++
++static lv_obj_t *s_img;
++static lv_image_dsc_t s_dsc;
++static uint8_t *s_pix;           /* PSRAM copy of the pixels */
++static bool s_have = false, s_loaded = false;
++static void (*s_touch_cb)(void);
++static char s_status[40];
++static volatile bool s_busy;
++
++static const esp_partition_t *part(void)
++{
++    static const esp_partition_t *p;
++    if (!p) {
++        p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, (esp_partition_subtype_t)0x42, "avatar");
++    }
++    return p;
++}
++
++static bool read_hdr(hdr_t *h)
++{
++    const esp_partition_t *p = part();
++    return p && esp_partition_read(p, 0, h, sizeof(*h)) == ESP_OK && h->magic == MAGIC && h->w >= 16 && h->w <= MAX_PX &&
++           h->h >= 16 && h->h <= MAX_PX && h->bytes == (uint32_t)h->w * h->h * 2;
++}
++
++bool muse_photo_present(void)
++{
++    if (!s_have) {
++        hdr_t h;
++        s_have = read_hdr(&h);
++    }
++    return s_have;
++}
++
++static bool load(void)
++{
++    hdr_t h;
++    if (!read_hdr(&h)) {
++        return false;
++    }
++    uint8_t *buf = heap_caps_malloc(h.bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++    if (!buf) {
++        return false;
++    }
++    if (esp_partition_read(part(), HDR, buf, h.bytes) != ESP_OK) {
++        heap_caps_free(buf);
++        return false;
++    }
++    uint8_t *old = s_pix;
++    memset(&s_dsc, 0, sizeof(s_dsc));
++    s_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
++    s_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
++    s_dsc.header.w = h.w;
++    s_dsc.header.h = h.h;
++    s_dsc.header.stride = h.w * 2;
++    s_dsc.data_size = h.bytes;
++    s_dsc.data = buf;
++    s_pix = buf;
++    s_loaded = true;
++    if (s_img) {
++        lv_image_set_src(s_img, &s_dsc);
++    }
++    if (old) {
++        heap_caps_free(old);
++    }
++    return true;
++}
++
++static void on_click(lv_event_t *e)
++{
++    (void)e;
++    if (s_touch_cb) {
++        s_touch_cb();
++    }
++}
++
++void muse_photo_build(lv_obj_t *face)
++{
++    s_img = lv_image_create(face);
++    lv_obj_add_flag(s_img, LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_CLICKABLE);
++    lv_obj_add_event_cb(s_img, on_click, LV_EVENT_CLICKED, NULL);
++}
++
++void muse_photo_show(bool on)
++{
++    if (!s_img) {
++        return;
++    }
++    if (on && (!s_loaded || !s_pix)) {
++        load();
++    }
++    if (on && s_loaded) {
++        lv_obj_remove_flag(s_img, LV_OBJ_FLAG_HIDDEN);
++    } else {
++        lv_obj_add_flag(s_img, LV_OBJ_FLAG_HIDDEN);
++    }
++}
++
++bool muse_photo_visible(void)
++{
++    return s_img && !lv_obj_has_flag(s_img, LV_OBJ_FLAG_HIDDEN);
++}
++
++void muse_photo_place(int y, int avatar_px)
++{
++    if (!s_img || !s_loaded) {
++        return;
++    }
++    /* Fill the avatar's square; the source is centred, so scaling about the middle keeps it in place. */
++    lv_image_set_scale(s_img, (uint32_t)avatar_px * 256 / s_dsc.header.w);
++    lv_image_set_pivot(s_img, s_dsc.header.w / 2, s_dsc.header.h / 2);
++    lv_obj_align(s_img, LV_ALIGN_CENTER, 0, y);
++}
++
++void muse_photo_set_touch_cb(void (*cb)(void)) { s_touch_cb = cb; }
++
++/* ---------- download ---------- */
++
++bool muse_photo_fetching(void) { return s_busy; }
++const char *muse_photo_status(void) { return s_status; }
++
++static bool url_for(const char *src, char *out, size_t cap)
++{
++    const char *p = src[0] ? strstr(src, "/chat") : NULL;
++    if (!p) {
++        return false;
++    }
++    snprintf(out, cap, "%.*s/avatar%s", (int)(p - src), src, p + 5);
++    return true;
++}
++
++static bool fetch_from(const char *url)
++{
++    const esp_partition_t *p = part();
++    if (!p) {
++        snprintf(s_status, sizeof(s_status), "No avatar partition");
++        return false;
++    }
++    esp_http_client_config_t cfg = {};
++    cfg.url = url;
++    cfg.crt_bundle_attach = esp_crt_bundle_attach;
++    cfg.method = HTTP_METHOD_POST;
++    cfg.timeout_ms = 15000;
++    esp_http_client_handle_t h = esp_http_client_init(&cfg);
++    if (!h) {
++        return false;
++    }
++    bool ok = false;
++    uint8_t *buf = heap_caps_malloc(4096, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++    if (buf && esp_http_client_open(h, 0) == ESP_OK) {
++        esp_http_client_fetch_headers(h);
++        int status = esp_http_client_get_status_code(h);
++        if (status == 404) {
++            snprintf(s_status, sizeof(s_status), "No picture on the server");
++        } else if (status != 200) {
++            snprintf(s_status, sizeof(s_status), "HTTP %d", status);
++        } else {
++            hdr_t hd;
++            int got = 0, r;
++            while (got < (int)sizeof(hd) && (r = esp_http_client_read(h, (char *)&hd + got, sizeof(hd) - got)) > 0) {
++                got += r;
++            }
++            if (got != (int)sizeof(hd) || hd.magic != MAGIC || hd.w > MAX_PX || hd.h > MAX_PX || hd.bytes != (uint32_t)hd.w * hd.h * 2) {
++                snprintf(s_status, sizeof(s_status), "Bad picture");
++            } else {
++                uint32_t total = HDR + hd.bytes;
++                uint32_t erase = (total + 4095) & ~4095U;
++                /* The header goes last, so a half-written picture is never taken for a whole one. */
++                if (erase > p->size || esp_partition_erase_range(p, 0, erase) != ESP_OK) {
++                    snprintf(s_status, sizeof(s_status), "Flash error");
++                } else {
++                    uint32_t done = 0;
++                    ok = true;
++                    while (done < hd.bytes && ok) {
++                        int want = hd.bytes - done < 4096 ? hd.bytes - done : 4096;
++                        int n = esp_http_client_read(h, (char *)buf, want);
++                        if (n <= 0) {
++                            snprintf(s_status, sizeof(s_status), "Download cut off");
++                            ok = false;
++                            break;
++                        }
++                        ok = esp_partition_write(p, HDR + done, buf, n) == ESP_OK;
++                        done += n;
++                        snprintf(s_status, sizeof(s_status), "Downloading %u%%", (unsigned)(done * 100ULL / hd.bytes));
++                    }
++                    if (ok) {
++                        ok = esp_partition_write(p, 0, &hd, sizeof(hd)) == ESP_OK;
++                    }
++                }
++            }
++        }
++        esp_http_client_close(h);
++    } else if (!buf) {
++        snprintf(s_status, sizeof(s_status), "Out of memory");
++    } else {
++        snprintf(s_status, sizeof(s_status), "Can't reach the gateway");
++    }
++    heap_caps_free(buf);
++    esp_http_client_cleanup(h);
++    return ok;
++}
++
++static void fetch_task(void *arg)
++{
++    (void)arg;
++    char a[320], b[320];
++    bool ha = url_for(CONFIG_MUSE_BRAIN_URL, a, sizeof(a)), hb = url_for(CONFIG_MUSE_BRAIN_FALLBACK_URL, b, sizeof(b));
++    snprintf(s_status, sizeof(s_status), "Downloading 0%%");
++    bool ok = (ha && fetch_from(a)) || (hb && fetch_from(b));
++    if (ok) {
++        s_have = false;
++        s_loaded = false;   /* the next show() loads the new one */
++        snprintf(s_status, sizeof(s_status), "Done");
++    } else if (!s_status[0] || !strncmp(s_status, "Downloading", 11)) {
++        snprintf(s_status, sizeof(s_status), ha || hb ? "Failed" : "No gateway");
++    }
++    ESP_LOGI(TAG, "fetch: %s", s_status);
++    s_busy = false;
++    vTaskDelete(NULL);
++}
++
++void muse_photo_fetch(void)
++{
++    if (s_busy) {
++        return;
++    }
++    s_busy = true;
++    s_status[0] = 0;
++    if (xTaskCreate(fetch_task, "muse_photo", 6144, NULL, 3, NULL) != pdPASS) {
++        s_busy = false;
++        snprintf(s_status, sizeof(s_status), "Out of memory");
++    }
++}
+diff --git a/esp32/components/muse/muse_photo.h b/esp32/components/muse/muse_photo.h
+new file mode 100644
+index 0000000..b6d14a0
+--- /dev/null
++++ b/esp32/components/muse/muse_photo.h
+@@ -0,0 +1,31 @@
++/*
++ * Local addition: a picture of your own as the main-screen avatar (Settings > Avatar > Picture). It is a 233x233 RGB565
++ * image kept in the "avatar" flash partition and fetched from the gateway (POST /avatar). tools/make-avatar-img.py makes it.
++ */
++
++#pragma once
++
++#include <stdbool.h>
++
++#include "lvgl.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++bool muse_photo_present(void);                  /* a picture is stored */
++/* In the LVGL task (display lock held). */
++void muse_photo_build(lv_obj_t *face);          /* creates the image on `face`, hidden */
++void muse_photo_show(bool on);
++bool muse_photo_visible(void);
++void muse_photo_place(int y, int avatar_px);    /* same arguments as the eyes: centre offset and the size to fill */
++void muse_photo_set_touch_cb(void (*cb)(void));
++
++/* Any task. */
++void muse_photo_fetch(void);                    /* download the picture from the gateway in the background */
++bool muse_photo_fetching(void);
++const char *muse_photo_status(void);            /* "", "Downloading 40%", "Done", or an error */
++
++#ifdef __cplusplus
++}
++#endif
 diff --git a/esp32/components/muse/muse_settings.c b/esp32/components/muse/muse_settings.c
-index 4b0dda9..7534270 100644
+index 4b0dda9..ca74517 100644
 --- a/esp32/components/muse/muse_settings.c
 +++ b/esp32/components/muse/muse_settings.c
-@@ -34,6 +34,8 @@ static const char *TAG = "muse_settings";
+@@ -34,6 +34,9 @@ static const char *TAG = "muse_settings";
  static struct {
      uint8_t volume;
      bool speaker_on;
 +    bool pushes_on;
 +    bool eyes_on;
++    uint8_t avatar;       /* 0 eyes, 1 pixel, 2 picture; eyes_on mirrors avatar == 0 */
      uint8_t mic_gain;
      uint8_t brightness;
      uint16_t sleep_s;
-@@ -47,6 +49,7 @@ static struct {
+@@ -47,6 +50,7 @@ static struct {
  } s = {
      .volume = CONFIG_MUSE_DEFAULT_VOLUME,
      .speaker_on = true,
@@ -23773,7 +24143,7 @@ index 4b0dda9..7534270 100644
      .mic_gain = 30,
      .brightness = 100,
      .sleep_s = 120,
-@@ -118,6 +121,12 @@ esp_err_t muse_settings_init(void)
+@@ -118,6 +122,17 @@ esp_err_t muse_settings_init(void)
      if (nvs_get_u8(s_nvs, "speaker", &b) == ESP_OK) {
          s.speaker_on = b;
      }
@@ -23783,19 +24153,25 @@ index 4b0dda9..7534270 100644
 +    if (nvs_get_u8(s_nvs, "eyes", &b) == ESP_OK) {
 +        s.eyes_on = b;
 +    }
++    s.avatar = s.eyes_on ? 0 : 1;
++    if (nvs_get_u8(s_nvs, "avatar", &b) == ESP_OK && b <= 2) {
++        s.avatar = b;
++        s.eyes_on = b == 0;
++    }
      load_u8("mic_gain", &s.mic_gain);
      load_u8("bright", &s.brightness);
      nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
-@@ -149,6 +158,8 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
+@@ -149,6 +164,9 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
  
  int muse_settings_volume(void) { return s.volume; }
  bool muse_settings_speaker_on(void) { return s.speaker_on; }
 +bool muse_settings_pushes_on(void) { return s.pushes_on; }
-+bool muse_settings_eyes_on(void) { return s.eyes_on; }
++bool muse_settings_eyes_on(void) { return s.avatar == 0; }
++int muse_settings_avatar(void) { return s.avatar; }
  int muse_settings_mic_gain(void) { return s.mic_gain; }
  int muse_settings_brightness(void) { return s.brightness; }
  int muse_settings_sleep_s(void) { return s.sleep_s; }
-@@ -205,6 +216,19 @@ void muse_settings_set_speaker_on(bool on)
+@@ -205,6 +223,26 @@ void muse_settings_set_speaker_on(bool on)
      notify(MUSE_SETTING_SPEAKER);
  }
  
@@ -23808,15 +24184,22 @@ index 4b0dda9..7534270 100644
 +
 +void muse_settings_set_eyes_on(bool on)
 +{
-+    s.eyes_on = on;
-+    save_u8("eyes", on);
++    muse_settings_set_avatar(on ? 0 : 1);
++}
++
++void muse_settings_set_avatar(int which)
++{
++    s.avatar = which < 0 ? 0 : (which > 2 ? 2 : which);
++    s.eyes_on = s.avatar == 0;
++    save_u8("avatar", s.avatar);
++    save_u8("eyes", s.eyes_on);
 +}
 +
  void muse_settings_set_mic_gain(int db)
  {
      s.mic_gain = clampi(db, 0, MUSE_MIC_GAIN_MAX);
 diff --git a/esp32/components/muse/muse_settings.h b/esp32/components/muse/muse_settings.h
-index 705a5cb..119d3ae 100644
+index 705a5cb..aa3fae9 100644
 --- a/esp32/components/muse/muse_settings.h
 +++ b/esp32/components/muse/muse_settings.h
 @@ -45,6 +45,7 @@ typedef enum {
@@ -23827,29 +24210,73 @@ index 705a5cb..119d3ae 100644
  } muse_setting_t;
  
  typedef void (*muse_setting_cb_t)(muse_setting_t what);
-@@ -54,6 +55,8 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
+@@ -54,6 +55,9 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
  
  int muse_settings_volume(void);         /* 0..100 */
  bool muse_settings_speaker_on(void);    /* off: replies are shown, not played */
 +bool muse_settings_pushes_on(void);     /* on: messages Muse sends unasked are shown and played */
-+bool muse_settings_eyes_on(void);       /* on: the eyes avatar instead of the pixel avatar */
++bool muse_settings_eyes_on(void);       /* the eyes avatar (muse_settings_avatar() == 0) */
++int muse_settings_avatar(void);         /* 0 eyes, 1 Muse's pixel character, 2 your own picture (muse_photo.h) */
  int muse_settings_mic_gain(void);       /* dB, 0..MUSE_MIC_GAIN_MAX */
  int muse_settings_brightness(void);     /* 10..100 */
  int muse_settings_sleep_s(void);        /* 0 = never */
-@@ -68,6 +71,8 @@ size_t muse_settings_hatch_token_len(void);
+@@ -68,6 +72,9 @@ size_t muse_settings_hatch_token_len(void);
  
  void muse_settings_set_volume(int pct);
  void muse_settings_set_speaker_on(bool on);
 +void muse_settings_set_pushes_on(bool on);
 +void muse_settings_set_eyes_on(bool on);
++void muse_settings_set_avatar(int which);
  void muse_settings_set_mic_gain(int db);
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..8471459 100644
+index 6a372ac..53e8d28 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
-@@ -1020,6 +1020,19 @@ static void on_speaker_sw(lv_event_t *e)
+@@ -31,12 +31,14 @@
+ #include "muse_chat.h"
+ #include "muse_input.h"
+ #include "muse_keypad.h"
++#include "muse_photo.h"
+ #include "muse_link.h"
+ #include "muse_settings.h"
+ #include "muse_state.h"
+ #include "muse_text.h"
+ #include "muse_ui.h"
+ #include "muse_voice.h"
++#include "muse_wg.h"
+ #include "muse_wifi.h"
+ 
+ /* Keep content in a column that stays inside a round panel (and fits a 368 px one). */
+@@ -60,7 +62,7 @@ typedef void (*text_done_cb_t)(const char *text);
+ static int s_text_scale = 466;
+ static lv_obj_t *s_tile;
+ static lv_obj_t *s_current;
+-static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text;
++static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text, *s_wg, *s_avatar;
+ 
+ /*
+  * Only home is kept. A sub-page is built when it opens and deleted on the way
+@@ -73,7 +75,7 @@ typedef struct {
+ } page_t;
+ 
+ /* Home values. */
+-static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
++static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_home_wg, *s_home_avatar, *s_about;
+ 
+ /* Wi-Fi page. */
+ static lv_obj_t *s_wifi_sw, *s_wifi_status, *s_wifi_saved, *s_wifi_scan_btn, *s_wifi_scan_lbl, *s_wifi_list;
+@@ -363,7 +365,7 @@ static lv_obj_t *info_row(lv_obj_t *list, const char *text)
+ 
+ static void drop(lv_obj_t *p)
+ {
+-    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text };
++    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text, &s_wg, &s_avatar };
+     for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
+         if (*pages[i] == p) {
+             *pages[i] = NULL;
+@@ -1020,6 +1022,13 @@ static void on_speaker_sw(lv_event_t *e)
      muse_settings_set_speaker_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
  }
  
@@ -23860,37 +24287,191 @@ index 6a372ac..8471459 100644
 +    muse_settings_set_pushes_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 +}
 +
-+/* On: two eyes that blink, follow a finger and tilt with the board; off: the pixel avatar. */
-+static void on_eyes_sw(lv_event_t *e)
-+{
-+    muse_settings_set_eyes_on(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
-+}
-+
  static void on_volume(lv_event_t *e)
  {
      int v = lv_slider_get_value(s_vol_sl);
-@@ -1059,6 +1072,8 @@ static void build_sound_page(lv_obj_t *tile)
+@@ -1059,6 +1068,7 @@ static void build_sound_page(lv_obj_t *tile)
      lv_obj_t *list;
      s_sound = page(tile, "SOUND", true, &list);
      s_spk_sw = switch_row(list, "Speaker", muse_settings_speaker_on(), on_speaker_sw);
 +    switch_row(list, "All messages", muse_settings_pushes_on(), on_pushes_sw);
-+    switch_row(list, "Eyes", muse_settings_eyes_on(), on_eyes_sw);
      s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
+@@ -1144,6 +1154,121 @@ static void tick_sleep(void)
+     }
+ }
+ 
++
++/* ---------- Avatar ---------- */
++
++static lv_obj_t *s_av_checks[3], *s_av_status;
++
++static void on_avatar_choice(lv_event_t *e)
++{
++    muse_settings_set_avatar((int)(intptr_t)lv_event_get_user_data(e));
++}
++
++static void on_avatar_fetch(lv_event_t *e)
++{
++    (void)e;
++    muse_photo_fetch();
++}
++
++static void build_avatar_page(lv_obj_t *tile)
++{
++    static const char *const NAMES[] = { "Eyes", "Pixel Muse", "Picture" };
++    lv_obj_t *list;
++    s_avatar = page(tile, "AVATAR", true, &list);
++    note(list, "What the main screen shows:");
++    for (int i = 0; i < 3; i++) {
++        row(list, NULL, NAMES[i], &s_av_checks[i], on_avatar_choice, (void *)(intptr_t)i);
++        lv_obj_set_style_text_color(s_av_checks[i], lv_color_hex(COLOR_ACCENT), 0);
++    }
++    button(list, LV_SYMBOL_DOWNLOAD "  Get picture", COLOR_ACCENT, on_avatar_fetch, NULL);
++    s_av_status = note(list, "");
++}
++
++static const char *avatar_name(void)
++{
++    static const char *const NAMES[] = { "Eyes", "Pixel Muse", "Picture" };
++    return NAMES[muse_settings_avatar()];
++}
++
++static void tick_avatar(void)
++{
++    int cur = muse_settings_avatar();
++    for (int i = 0; i < 3; i++) {
++        set_text(s_av_checks[i], cur == i ? LV_SYMBOL_OK : "");
++    }
++    const char *st = muse_photo_status();
++    if (!st[0]) {
++        st = muse_photo_present() ? "A picture is stored." : "No picture yet: put one on the gateway, then Get picture.";
++    }
++    set_text(s_av_status, st);
++}
++
++/* ---------- WireGuard ---------- */
++
++static lv_obj_t *s_wg_checks[3], *s_wg_state, *s_wg_addr, *s_wg_key, *s_wg_setup_lbl, *s_wg_note;
++
++static void on_wg_mode(lv_event_t *e)
++{
++    muse_wg_set_mode((muse_wg_mode_t)(int)(intptr_t)lv_event_get_user_data(e));
++}
++
++static void on_wg_setup(lv_event_t *e)
++{
++    (void)e;
++    muse_wg_enroll();
++}
++
++static void on_wg_forget(lv_event_t *e)
++{
++    (void)e;
++    muse_wg_forget();
++}
++
++static void build_wg_page(lv_obj_t *tile)
++{
++    static const char *const NAMES[] = { "Off", "Auto", "Always" };
++    lv_obj_t *list;
++    s_wg = page(tile, "WIREGUARD", true, &list);
++    note(list, "Auto: use the tunnel only when Muse can't be reached directly. Never on the home Wi-Fi.");
++    for (int i = 0; i < 3; i++) {
++        row(list, NULL, NAMES[i], &s_wg_checks[i], on_wg_mode, (void *)(intptr_t)i);
++        lv_obj_set_style_text_color(s_wg_checks[i], lv_color_hex(COLOR_ACCENT), 0);
++    }
++    s_wg_state = info_row(list, "Status");
++    s_wg_addr = info_row(list, "Tunnel address");
++    s_wg_key = info_row(list, "Device key");
++    button(list, LV_SYMBOL_DOWNLOAD "  Get config", COLOR_ACCENT, on_wg_setup, &s_wg_setup_lbl);
++    button(list, LV_SYMBOL_TRASH "  Forget", COLOR_DANGER, on_wg_forget, NULL);
++    s_wg_note = note(list, "");
++}
++
++static void tick_wg(void)
++{
++    muse_wg_mode_t m = muse_wg_mode();
++    for (int i = 0; i < 3; i++) {
++        set_text(s_wg_checks[i], (int)m == i ? LV_SYMBOL_OK : "");
++    }
++    char buf[96];
++    set_text(s_wg_state, muse_wg_enrolling() ? "Getting config..." : muse_wg_state_name(muse_wg_state()));
++    muse_wg_address(buf);
++    set_text(s_wg_addr, buf[0] ? buf : "-");
++    muse_wg_public_key(buf);
++    if (buf[0]) {
++        buf[10] = '\0';
++        strlcat(buf, "...", sizeof(buf));
++    }
++    set_text(s_wg_key, buf[0] ? buf : "-");
++    const char *err = muse_wg_last_error();
++    if (err[0]) {
++        snprintf(buf, sizeof(buf), "%s", err);
++    } else if (!muse_wg_configured()) {
++        snprintf(buf, sizeof(buf), "Get config, then approve this key on the server.");
++    } else {
++        buf[0] = '\0';
++    }
++    set_text(s_wg_note, buf);
++}
++
+ /* ---------- Battery ---------- */
+ 
+ static void on_battery_reset(lv_event_t *e)
+@@ -1287,6 +1412,8 @@ static const page_t BLE = { &s_ble, build_ble_page };
+ static const page_t SOUND = { &s_sound, build_sound_page };
+ static const page_t SLEEP = { &s_sleep, build_sleep_page };
+ static const page_t BATTERY = { &s_battery, build_battery_page };
++static const page_t WG = { &s_wg, build_wg_page };
++static const page_t AVATAR = { &s_avatar, build_avatar_page };
+ static const page_t POWER = { &s_power, build_power_page };
+ 
+ static void build_home(lv_obj_t *tile)
+@@ -1297,6 +1424,8 @@ static void build_home(lv_obj_t *tile)
+     row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
+     row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
+     row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
++    row(list, LV_SYMBOL_IMAGE, "Avatar", &s_home_avatar, on_nav, (void *)&AVATAR);
++    row(list, LV_SYMBOL_UPLOAD, "WireGuard", &s_home_wg, on_nav, (void *)&WG);
+     row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
+     row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
+     if (muse_board->power_off) {
+@@ -1325,6 +1454,8 @@ static void tick_home(void)
+     } else {
+         set_text(s_home_sound, "Muted");
+     }
++    set_text(s_home_avatar, avatar_name());
++    set_text(s_home_wg, muse_wg_mode() == MUSE_WG_OFF ? "Off" : muse_wg_state_name(muse_wg_state()));
+     set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
+ 
+     muse_power_t p = muse_state_power();
+@@ -1376,6 +1507,10 @@ void muse_settings_ui_tick(bool visible)
+         tick_sound();
+     } else if (s_current == s_sleep) {
+         tick_sleep();
++    } else if (s_current == s_avatar) {
++        tick_avatar();
++    } else if (s_current == s_wg) {
++        tick_wg();
+     } else if (s_current == s_battery) {
+         tick_battery();
+     }
 diff --git a/esp32/components/muse/muse_ui.c b/esp32/components/muse/muse_ui.c
-index d0d4e2f..67560ed 100644
+index d0d4e2f..359e15e 100644
 --- a/esp32/components/muse/muse_ui.c
 +++ b/esp32/components/muse/muse_ui.c
-@@ -32,6 +32,7 @@
+@@ -32,6 +32,8 @@
  #include "src/misc/lv_area_private.h"            /* lv_area_intersect, for the ring */
  
  #include "muse_ble.h"
 +#include "muse_eyes.h"
++#include "muse_photo.h"
  #include "muse_board.h"
  #include "muse_input.h"
  #include "muse_chat.h"
-@@ -118,6 +119,7 @@ static lv_obj_t *s_pair_code;
+@@ -118,6 +120,7 @@ static lv_obj_t *s_pair_code;
  static lv_obj_t *s_pair_title;
  static lv_obj_t *s_pair_hint;
  static lv_obj_t *s_canvas;
@@ -23898,7 +24479,7 @@ index d0d4e2f..67560ed 100644
  static lv_obj_t *s_mic_icon;
  static lv_obj_t *s_ptt_hint, *s_spk_hint, *s_pwr_hint;
  #if LV_USE_SNAPSHOT
-@@ -149,6 +151,18 @@ static SemaphoreHandle_t s_image_mutex;
+@@ -149,6 +152,18 @@ static SemaphoreHandle_t s_image_mutex;
  static uint16_t *s_image_buf;
  static lv_area_t s_image_area;
  static bool s_image_dirty;
@@ -23917,7 +24498,7 @@ index d0d4e2f..67560ed 100644
  static bool s_ready;
  
  static float s_level;
-@@ -394,6 +408,20 @@ static void invalidate_muse(void)
+@@ -394,6 +409,20 @@ static void invalidate_muse(void)
  
  static lv_obj_t *make_label(lv_obj_t *parent, const lv_font_t *font, uint32_t color);
  
@@ -23938,7 +24519,7 @@ index d0d4e2f..67560ed 100644
  /* A microphone from primitives: LVGL's symbol font has none. */
  static lv_obj_t *make_mic(lv_obj_t *parent, int size)
  {
-@@ -491,12 +519,99 @@ static void build_button_icons(lv_obj_t *face)
+@@ -491,12 +520,108 @@ static void build_button_icons(lv_obj_t *face)
      lv_obj_align(s_aux_icon, a->align, a->x, a->y);
  }
  
@@ -24027,18 +24608,27 @@ index d0d4e2f..67560ed 100644
 +/* Shows the eyes or the pixel avatar, whichever Settings > Sound > Eyes says. */
 +static void sync_avatar(void)
 +{
-+    bool eyes = muse_settings_eyes_on();
-+    if (eyes == muse_eyes_visible()) {
++    static int shown = -1;
++    int which = muse_settings_avatar();
++    if (which == 2 && !muse_photo_present()) {
++        which = 0;   /* no picture stored yet: the eyes stand in */
++    }
++    if (which == shown && (which != 2 || muse_photo_visible())) {
 +        return;
 +    }
-+    lv_obj_set_flag(s_canvas, LV_OBJ_FLAG_HIDDEN, eyes);
-+    muse_eyes_show(eyes);
++    shown = which;
++    lv_obj_set_flag(s_canvas, LV_OBJ_FLAG_HIDDEN, which != 1);
++    muse_eyes_show(which == 0);
++    muse_photo_show(which == 2);
++    if (which == 2) {
++        muse_photo_place(s_muse_y, (int)s_muse_src.header.w);
++    }
 +}
 +
  static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compact)
  {
      return s_small ? compact : full;
-@@ -518,7 +633,7 @@ static const lv_font_t *caption_font(void)
+@@ -518,7 +643,7 @@ static const lv_font_t *caption_font(void)
      }
      return &font;
  #else
@@ -24047,7 +24637,7 @@ index d0d4e2f..67560ed 100644
  #endif
  }
  
-@@ -565,6 +680,7 @@ static void on_speaker_event(lv_event_t *e)
+@@ -565,6 +690,7 @@ static void on_speaker_event(lv_event_t *e)
      bool idle = muse_state_mode(NULL) == MUSE_MODE_IDLE;   /* don't cover a reply's captions */
      switch (lv_event_get_code(e)) {
      case LV_EVENT_PRESSED:
@@ -24055,15 +24645,16 @@ index d0d4e2f..67560ed 100644
          speaker_grow(true);
          break;
      case LV_EVENT_LONG_PRESSED:
-@@ -627,6 +743,7 @@ static void move_muse_t(void *obj, int32_t t)
+@@ -627,6 +753,8 @@ static void move_muse_t(void *obj, int32_t t)
      set_canvas_px(s_from_px + (s_to_px - s_from_px) * t / 256);
      s_muse_y = s_from_y + (s_to_y - s_from_y) * t / 256;
      lv_obj_align(s_canvas, LV_ALIGN_CENTER, 0, s_muse_y);
 +    muse_eyes_place(s_muse_y, (int)s_muse_src.header.w, s_canvas_px);   /* the eyes follow the pixel avatar */
++    muse_photo_place(s_muse_y, (int)s_muse_src.header.w);
  }
  
  /* Eases Muse to `px` centred at `y`, from wherever it is now. */
-@@ -915,6 +1032,10 @@ static void build_screen(void)
+@@ -915,6 +1043,12 @@ static void build_screen(void)
      s_muse_y = s_big_y;
      lv_obj_add_flag(s_canvas, LV_OBJ_FLAG_CLICKABLE);
      lv_obj_add_event_cb(s_canvas, on_canvas_clicked, LV_EVENT_CLICKED, NULL);
@@ -24071,10 +24662,12 @@ index d0d4e2f..67560ed 100644
 +    muse_eyes_build(face, s_w);
 +    muse_eyes_set_touch_cb(on_eyes_touch);
 +    muse_eyes_place(s_big_y, s_canvas_px, s_canvas_px);
++    muse_photo_build(face);   /* your own picture, the third choice */
++    muse_photo_set_touch_cb(on_eyes_touch);
      if (s_ring) {
          /* The canvas's black corners reach the bezel; keep the ring on top. */
          lv_obj_move_foreground(s_ring);
-@@ -923,6 +1044,7 @@ static void build_screen(void)
+@@ -923,6 +1057,7 @@ static void build_screen(void)
  
      /* Status line: connectivity icons + power. */
      lv_obj_t *status = lv_obj_create(face);
@@ -24082,7 +24675,7 @@ index d0d4e2f..67560ed 100644
      lv_obj_remove_style_all(status);
      lv_obj_remove_flag(status, LV_OBJ_FLAG_SCROLLABLE);
      lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-@@ -1023,6 +1145,11 @@ static void on_cover_event(lv_event_t *e)
+@@ -1023,6 +1158,11 @@ static void on_cover_event(lv_event_t *e)
  static void image_hide_locked(void)
  {
      xSemaphoreTake(s_image_mutex, portMAX_DELAY);
@@ -24094,7 +24687,7 @@ index d0d4e2f..67560ed 100644
      if (s_image_buf) {
          lv_obj_add_flag(s_image, LV_OBJ_FLAG_HIDDEN);
          lv_image_set_src(s_image, NULL);
-@@ -1058,6 +1185,61 @@ static void image_sync(void)
+@@ -1058,6 +1198,61 @@ static void image_sync(void)
      xSemaphoreGive(s_image_mutex);
  }
  
@@ -24156,7 +24749,7 @@ index d0d4e2f..67560ed 100644
  static void on_image_clicked(lv_event_t *e)
  {
      (void)e;
-@@ -1148,6 +1330,38 @@ static void build_overlays(void)
+@@ -1148,6 +1343,38 @@ static void build_overlays(void)
      lv_obj_set_pos(s_image, 0, 0);
      lv_obj_add_flag(s_image, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
      lv_obj_add_event_cb(s_image, on_image_clicked, LV_EVENT_CLICKED, NULL);
@@ -24195,7 +24788,7 @@ index d0d4e2f..67560ed 100644
  #if CONFIG_MUSE_WATCHER_CAMERA
      s_camera_hint = lv_btn_create(scr);
      lv_obj_set_size(s_camera_hint, 244, 46);
-@@ -1465,14 +1679,16 @@ static void update_status(muse_mode_t mode, float now)
+@@ -1465,14 +1692,16 @@ static void update_status(muse_mode_t mode, float now)
          s_shown_lit = -1;
      }
  
@@ -24215,7 +24808,7 @@ index d0d4e2f..67560ed 100644
          /* Move the indicator rather than rotate the arc: a rotation redraws
           * the whole ring, and with it the whole screen. */
          int start = (int)(now * 300.0f) % 360;
-@@ -1488,7 +1704,7 @@ static void update_status(muse_mode_t mode, float now)
+@@ -1488,7 +1717,7 @@ static void update_status(muse_mode_t mode, float now)
          }
      } else {
          /* Bar along the bottom edge; a sliding segment while thinking. */
@@ -24224,7 +24817,7 @@ index d0d4e2f..67560ed 100644
          int w = ring * s_w / RING_RANGE;
          if (ring != s_ring_value || x) {
              lv_obj_set_width(s_bar, w);
-@@ -1612,6 +1828,7 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1612,6 +1841,7 @@ static void frame_tick(lv_timer_t *timer)
      }
      (void)timer;
      image_sync();
@@ -24232,7 +24825,7 @@ index d0d4e2f..67560ed 100644
      float mode_t;
      muse_mode_t mode = muse_state_mode(&mode_t);
      float now = (float)esp_timer_get_time() / 1e6f;
-@@ -1627,12 +1844,14 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1627,12 +1857,14 @@ static void frame_tick(lv_timer_t *timer)
          return;
      }
      update_chrome(now);
@@ -24249,7 +24842,7 @@ index d0d4e2f..67560ed 100644
      }
      if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
          /* Off screen, or sliding to or from settings: hold still so the
-@@ -1644,15 +1863,20 @@ static void frame_tick(lv_timer_t *timer)
+@@ -1644,15 +1876,22 @@ static void frame_tick(lv_timer_t *timer)
      float level = muse_state_level();
      s_level += (level - s_level) * (level > s_level ? 0.6f : 0.2f);
  
@@ -24265,6 +24858,8 @@ index d0d4e2f..67560ed 100644
 +    sync_avatar();
 +    if (muse_eyes_visible()) {
 +        muse_eyes_tick(mode, s_level, muse_state_happiness());
++    } else if (muse_photo_visible()) {
++        /* a still picture: nothing to draw */
 +    } else {
 +        muse_pose_t pose = {
 +            .mode = mode,
@@ -24279,7 +24874,7 @@ index d0d4e2f..67560ed 100644
  
      update_status(mode, now);
  }
-@@ -1704,6 +1928,7 @@ esp_err_t muse_ui_start(void)
+@@ -1704,6 +1943,7 @@ esp_err_t muse_ui_start(void)
          muse_menu_build(lv_screen_active(), s_w, s_h);
      }
      build_overlays();
@@ -24287,7 +24882,7 @@ index d0d4e2f..67560ed 100644
      lv_timer_create(frame_tick, muse_board->frame_ms, NULL);
      s_ready = true;
      muse_board->display_unlock();
-@@ -1784,6 +2009,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
+@@ -1784,6 +2024,31 @@ bool muse_ui_image_draw(int x, int y, int w, int h, const uint16_t *pixels)
      return true;
  }
  
@@ -24340,7 +24935,7 @@ index 422cb2e..e84ad33 100644
  void muse_ui_camera_hint(bool visible);
  
 diff --git a/esp32/components/muse/muse_voice.c b/esp32/components/muse/muse_voice.c
-index 38c7c9d..6c85b6c 100644
+index 38c7c9d..a3fff66 100644
 --- a/esp32/components/muse/muse_voice.c
 +++ b/esp32/components/muse/muse_voice.c
 @@ -36,6 +36,7 @@
@@ -24368,7 +24963,7 @@ index 38c7c9d..6c85b6c 100644
 + * `waiting` is the caption until there's a transcript or reply.
   */
 -static bool hatch_reply(bool *delivered)
-+#define WAIT_RING_S 60.0f                 /* the ring fills over this many seconds of waiting for a reply */
++#define WAIT_RING_S 60.0f                 /* one lap of the ring is this many seconds of waiting for a reply */
 +#define WAIT_RING_QUIET_US 1500000LL      /* silence this long after speech counts as waiting again */
 +
 +static bool hatch_reply_as(bool *delivered, const char *waiting)
@@ -24388,7 +24983,7 @@ index 38c7c9d..6c85b6c 100644
      int64_t t0 = esp_timer_get_time();
      *delivered = false;
      for (;;) {
-@@ -399,27 +410,50 @@ static bool hatch_reply(bool *delivered)
+@@ -399,27 +410,51 @@ static bool hatch_reply(bool *delivered)
          }
          size_t n = muse_hatch_turn_read(buf, MUSE_AUDIO_CHUNK, speaking || done ? 0 : 20);
          if (n) {
@@ -24423,9 +25018,10 @@ index 38c7c9d..6c85b6c 100644
 +            }
 +        }
 +        if (!done && (!speaking || waiting_ui)) {
-+            /* The ring counts the time since the question was asked. */
-+            float p = (float)(esp_timer_get_time() - t0) / (WAIT_RING_S * 1e6f);
-+            muse_state_set_progress(p < 0.01f ? 0.01f : p > 1.0f ? 1.0f : p);
++            /* The ring counts the time since the question was asked, and starts over every lap, so that a ring that is
++             * still moving says the wait is still on. */
++            float p = fmodf((float)(esp_timer_get_time() - t0) / (WAIT_RING_S * 1e6f), 1.0f);
++            muse_state_set_progress(p < 0.01f ? 0.01f : p);
          }
          /* The page being said, or before the speech the reply's opening page. */
          if ((speaking || replied) && muse_hatch_turn_caption(played, page, sizeof(page))) {
@@ -24440,7 +25036,7 @@ index 38c7c9d..6c85b6c 100644
      ESP_LOGI(TAG, "muse reply: %.2fs of audio, %.2fs total", (double)played / MUSE_AUDIO_RATE,
               (esp_timer_get_time() - t0) / 1e6);
      if (!played) {
-@@ -429,6 +463,23 @@ static bool hatch_reply(bool *delivered)
+@@ -429,6 +464,23 @@ static bool hatch_reply(bool *delivered)
      return false;
  }
  
@@ -24464,7 +25060,7 @@ index 38c7c9d..6c85b6c 100644
  static void go_idle(const char *caption)
  {
      muse_state_set_progress(0);
-@@ -796,7 +847,7 @@ static void voice_task(void *arg)
+@@ -796,7 +848,7 @@ static void voice_task(void *arg)
              muse_input_event_t ev;
              bool asleep = muse_state_asleep();
              bool battery = muse_state_on_battery();
@@ -24473,7 +25069,7 @@ index 38c7c9d..6c85b6c 100644
  #if HOLD_NOTES
              /* A press goes first: send_held() leaves it queued and returns
               * without backing off, so retrying before it's read would spin. */
-@@ -843,11 +894,42 @@ static void voice_task(void *arg)
+@@ -843,11 +895,42 @@ static void voice_task(void *arg)
                  muse_audio_loopback_test(muse_settings_volume());
                  pre_reset();
              }
@@ -24516,7 +25112,7 @@ index 38c7c9d..6c85b6c 100644
              muse_state_poke();
              if (ev.type != MUSE_PTT_DOWN) {
                  continue;
-@@ -920,6 +1002,23 @@ float muse_voice_monitor_db(void)
+@@ -920,6 +1003,23 @@ float muse_voice_monitor_db(void)
      return s_monitor_db;
  }
  
@@ -24554,6 +25150,637 @@ index 7a3ae28..74cf59a 100644
  /* Plays a short chirp at the current volume (when idle). */
  void muse_voice_request_chirp(void);
  
+diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
+new file mode 100644
+index 0000000..66d2abc
+--- /dev/null
++++ b/esp32/components/muse/muse_wg.c
+@@ -0,0 +1,578 @@
++/* See muse_wg.h. */
++
++#include "muse_wg.h"
++
++#include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/time.h>
++#include <netdb.h>
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <unistd.h>
++
++#include "cJSON.h"
++#include "esp_crt_bundle.h"
++#include "esp_http_client.h"
++#include "esp_log.h"
++#include "esp_netif.h"
++#include "esp_netif_sntp.h"
++#include "esp_random.h"
++#include "esp_timer.h"
++#include "esp_wifi.h"
++#include "esp_wireguard.h"
++#include "lwip/dns.h"
++#include "lwip/netif.h"
++#include "lwip/tcpip.h"
++#include "freertos/FreeRTOS.h"
++#include "freertos/task.h"
++#include "mbedtls/base64.h"
++#include "nvs.h"
++#include "sodium/crypto_scalarmult_curve25519.h"
++
++#include "muse_settings.h"
++
++static const char *TAG = "muse_wg";
++
++#define NS "muse_wg"
++#define KEY_B64 48
++#define PROBE_EVERY_US (60LL * 1000000)
++#define RETRY_AFTER_US (60LL * 1000000)
++
++#ifndef CONFIG_MUSE_HOME_SSID
++#define CONFIG_MUSE_HOME_SSID ""
++#endif
++#ifndef CONFIG_MUSE_BRAIN_URL
++#define CONFIG_MUSE_BRAIN_URL ""
++#endif
++#ifndef CONFIG_MUSE_BRAIN_FALLBACK_URL
++#define CONFIG_MUSE_BRAIN_FALLBACK_URL ""
++#endif
++
++/* The strings below are pointed at by wireguard_config_t, so they stay put. */
++static char s_priv[KEY_B64], s_pub[KEY_B64], s_srv[KEY_B64], s_ep[64], s_addr[20], s_mask[20] = "255.255.255.0";
++static uint16_t s_port = 51820, s_keep = 25;
++#ifndef MUSE_WG_DEFAULT_MODE
++#define MUSE_WG_DEFAULT_MODE MUSE_WG_AUTO
++#endif
++static uint8_t s_mode = MUSE_WG_DEFAULT_MODE;
++static bool s_configured;
++static volatile muse_wg_state_t s_state = MUSE_WG_S_OFF;
++static volatile bool s_enrolling, s_enroll_req;
++static char s_err[64];
++static wireguard_config_t s_cfg;
++static wireguard_ctx_t s_ctx;
++static bool s_ctx_ready, s_up;
++static nvs_handle_t s_nvs;
++static bool s_nvs_ok;
++
++static void set_err(const char *e) { strlcpy(s_err, e ? e : "", sizeof(s_err)); }
++
++/* ---------- storage ---------- */
++
++static void load(void)
++{
++    if (nvs_open(NS, NVS_READWRITE, &s_nvs) != ESP_OK) {
++        return;
++    }
++    s_nvs_ok = true;
++    uint8_t b;
++    if (nvs_get_u8(s_nvs, "mode", &b) == ESP_OK && b <= MUSE_WG_ALWAYS) {
++        s_mode = b;
++    }
++    size_t n;
++#define GETS(key, buf) do { n = sizeof(buf); if (nvs_get_str(s_nvs, key, buf, &n) != ESP_OK) buf[0] = 0; } while (0)
++    GETS("priv", s_priv);
++    GETS("pub", s_pub);
++    GETS("srv", s_srv);
++    GETS("ep", s_ep);
++    GETS("addr", s_addr);
++    if (nvs_get_str(s_nvs, "mask", s_mask, &(size_t){sizeof(s_mask)}) != ESP_OK) {
++        strlcpy(s_mask, "255.255.255.0", sizeof(s_mask));
++    }
++    nvs_get_u16(s_nvs, "port", &s_port);
++    nvs_get_u16(s_nvs, "keep", &s_keep);
++    s_configured = s_priv[0] && s_srv[0] && s_ep[0] && s_addr[0];
++}
++
++static void save_str(const char *k, const char *v)
++{
++    if (s_nvs_ok) {
++        nvs_set_str(s_nvs, k, v);
++    }
++}
++
++static void commit(void)
++{
++    if (s_nvs_ok) {
++        nvs_commit(s_nvs);
++    }
++}
++
++muse_wg_mode_t muse_wg_mode(void) { return (muse_wg_mode_t)s_mode; }
++
++void muse_wg_set_mode(muse_wg_mode_t m)
++{
++    s_mode = m;
++    if (s_nvs_ok) {
++        nvs_set_u8(s_nvs, "mode", m);
++        commit();
++    }
++}
++
++muse_wg_state_t muse_wg_state(void) { return s_state; }
++bool muse_wg_configured(void) { return s_configured; }
++bool muse_wg_enrolling(void) { return s_enrolling; }
++const char *muse_wg_last_error(void) { return s_err; }
++void muse_wg_public_key(char out[48]) { strlcpy(out, s_pub, 48); }
++void muse_wg_address(char out[20]) { strlcpy(out, s_addr, 20); }
++
++const char *muse_wg_state_name(muse_wg_state_t s)
++{
++    static const char *const N[] = { "Off", "Not set up", "No Wi-Fi", "Home", "Direct", "Connecting", "Connected", "Failed" };
++    return N[s];
++}
++
++void muse_wg_enroll(void) { s_enroll_req = true; }
++
++void muse_wg_forget(void)
++{
++    s_priv[0] = s_pub[0] = s_srv[0] = s_ep[0] = s_addr[0] = 0;
++    s_configured = false;
++    if (s_nvs_ok) {
++        const char *keys[] = { "priv", "pub", "srv", "ep", "addr" };
++        for (size_t i = 0; i < 5; i++) {
++            nvs_erase_key(s_nvs, keys[i]);
++        }
++        commit();
++    }
++    set_err("");
++}
++
++/* ---------- helpers ---------- */
++
++static bool b64(const unsigned char *in, size_t n, char *out, size_t cap)
++{
++    size_t olen = 0;
++    return mbedtls_base64_encode((unsigned char *)out, cap, &olen, in, n) == 0 && (out[olen] = 0, true);
++}
++
++static void make_keys(void)
++{
++    uint8_t sk[32], pk[32];
++    esp_fill_random(sk, sizeof(sk));
++    sk[0] &= 248;
++    sk[31] &= 127;
++    sk[31] |= 64;
++    crypto_scalarmult_curve25519_base(pk, sk);
++    b64(sk, 32, s_priv, sizeof(s_priv));
++    b64(pk, 32, s_pub, sizeof(s_pub));
++    save_str("priv", s_priv);
++    save_str("pub", s_pub);
++    commit();
++    memset(sk, 0, sizeof(sk));
++}
++
++static bool at_home(void)
++{
++    if (!CONFIG_MUSE_HOME_SSID[0]) {
++        return false;
++    }
++    wifi_ap_record_t ap;
++    return esp_wifi_sta_get_ap_info(&ap) == ESP_OK && strcmp((const char *)ap.ssid, CONFIG_MUSE_HOME_SSID) == 0;
++}
++
++static bool sta_has_ip(void)
++{
++    esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
++    esp_netif_ip_info_t ip;
++    return n && esp_netif_get_ip_info(n, &ip) == ESP_OK && ip.ip.addr != 0;
++}
++
++static void current_ssid(char *out, size_t cap)
++{
++    wifi_ap_record_t ap;
++    out[0] = 0;
++    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
++        strlcpy(out, (const char *)ap.ssid, cap);
++    }
++}
++
++/* A quick TCP connect to Muse's server decides whether the tunnel is needed. */
++static bool muse_reachable(void)
++{
++    char host[MUSE_HOST_MAX + 1];
++    muse_settings_hatch_host(host);
++    if (!host[0]) {
++        return true;
++    }
++    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
++    int gai = getaddrinfo(host, "443", &hints, &res);
++    if (gai != 0 || !res) {
++        ESP_LOGW(TAG, "probe: lookup of %s failed (%d)", host, gai);
++        return false;
++    }
++    bool ok = false;
++    {
++        char ipb[20];
++        inet_ntop(AF_INET, &((struct sockaddr_in *)res->ai_addr)->sin_addr, ipb, sizeof(ipb));
++        ESP_LOGI(TAG, "probe: %s is %s", host, ipb);
++    }
++    int fd = socket(res->ai_family, res->ai_socktype, 0);
++    if (fd >= 0) {
++        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
++        int r = connect(fd, res->ai_addr, res->ai_addrlen);
++        if (r == 0) {
++            ok = true;
++        } else if (errno == EINPROGRESS) {
++            fd_set w;
++            FD_ZERO(&w);
++            FD_SET(fd, &w);
++            struct timeval tv = { .tv_sec = 4 };
++            if (select(fd + 1, NULL, &w, NULL, &tv) > 0) {
++                int err = 0;
++                socklen_t l = sizeof(err);
++                ok = getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l) == 0 && err == 0;
++            }
++        }
++        close(fd);
++    }
++    freeaddrinfo(res);
++    return ok;
++}
++
++static bool clock_ok(void)
++{
++    return time(NULL) > 1767225600;   /* 2026-01-01 */
++}
++
++static void ensure_clock(void)
++{
++    if (clock_ok()) {
++        return;
++    }
++    static const char *const SERVERS[] = { "ntp.aliyun.com", "time.cloudflare.com" };
++    for (int i = 0; i < 2 && !clock_ok(); i++) {
++        esp_sntp_config_t c = ESP_NETIF_SNTP_DEFAULT_CONFIG(SERVERS[i]);
++        if (esp_netif_sntp_init(&c) == ESP_OK) {
++            esp_netif_sntp_sync_wait(pdMS_TO_TICKS(6000));
++            esp_netif_sntp_deinit();
++        }
++    }
++    ESP_LOGI(TAG, "clock %s", clock_ok() ? "set" : "still wrong");
++}
++
++/* ---------- enrolment ---------- */
++
++static bool url_for(const char *src, char *out, size_t cap)
++{
++    const char *p = src[0] ? strstr(src, "/chat") : NULL;
++    if (!p) {
++        return false;
++    }
++    snprintf(out, cap, "%.*s/wg/enroll%s", (int)(p - src), src, p + 5);
++    return true;
++}
++
++static bool enroll_once(const char *url)
++{
++    cJSON *req = cJSON_CreateObject();
++    cJSON_AddStringToObject(req, "pub", s_pub);
++    char *body = cJSON_PrintUnformatted(req);
++    cJSON_Delete(req);
++    if (!body) {
++        return false;
++    }
++    esp_http_client_config_t cfg = {};
++    cfg.url = url;
++    cfg.crt_bundle_attach = esp_crt_bundle_attach;
++    cfg.method = HTTP_METHOD_POST;
++    cfg.timeout_ms = 12000;
++    esp_http_client_handle_t h = esp_http_client_init(&cfg);
++    bool ok = false;
++    if (h) {
++        esp_http_client_set_header(h, "Content-Type", "application/json");
++        esp_http_client_set_header(h, "X-Device", "muse-gadget");
++        int len = strlen(body);
++        if (esp_http_client_open(h, len) == ESP_OK && esp_http_client_write(h, body, len) == len) {
++            esp_http_client_fetch_headers(h);
++            int status = esp_http_client_get_status_code(h);
++            char buf[512];
++            int n = 0, r;
++            while (n < (int)sizeof(buf) - 1 && (r = esp_http_client_read(h, buf + n, sizeof(buf) - 1 - n)) > 0) {
++                n += r;
++            }
++            buf[n] = 0;
++            cJSON *j = status == 200 ? cJSON_Parse(buf) : NULL;
++            if (j) {
++                const cJSON *srv = cJSON_GetObjectItem(j, "server_pub"), *ep = cJSON_GetObjectItem(j, "endpoint"),
++                            *port = cJSON_GetObjectItem(j, "port"), *addr = cJSON_GetObjectItem(j, "address"),
++                            *mask = cJSON_GetObjectItem(j, "netmask"), *keep = cJSON_GetObjectItem(j, "keepalive"),
++                            *now = cJSON_GetObjectItem(j, "now");
++                if (cJSON_IsString(srv) && cJSON_IsString(ep) && cJSON_IsString(addr)) {
++                    strlcpy(s_srv, srv->valuestring, sizeof(s_srv));
++                    strlcpy(s_ep, ep->valuestring, sizeof(s_ep));
++                    strlcpy(s_addr, addr->valuestring, sizeof(s_addr));
++                    if (cJSON_IsString(mask)) strlcpy(s_mask, mask->valuestring, sizeof(s_mask));
++                    if (cJSON_IsNumber(port)) s_port = port->valueint;
++                    if (cJSON_IsNumber(keep)) s_keep = keep->valueint;
++                    save_str("srv", s_srv);
++                    save_str("ep", s_ep);
++                    save_str("addr", s_addr);
++                    save_str("mask", s_mask);
++                    if (s_nvs_ok) {
++                        nvs_set_u16(s_nvs, "port", s_port);
++                        nvs_set_u16(s_nvs, "keep", s_keep);
++                    }
++                    commit();
++                    if (cJSON_IsNumber(now) && !clock_ok()) {
++                        struct timeval tv = { .tv_sec = (time_t)now->valuedouble };
++                        settimeofday(&tv, NULL);
++                    }
++                    s_configured = true;
++                    ok = true;
++                } else {
++                    set_err("Bad reply");
++                }
++                cJSON_Delete(j);
++            } else if (status == 503) {
++                set_err("Server not set up");
++            } else if (status == 403) {
++                set_err("Gateway refused");
++            } else if (status != 200) {
++                snprintf(s_err, sizeof(s_err), "HTTP %d", status);
++            }
++        }
++        esp_http_client_cleanup(h);
++    }
++    free(body);
++    return ok;
++}
++
++static void do_enroll(void)
++{
++    s_enrolling = true;
++    set_err("");
++    if (!s_pub[0]) {
++        make_keys();
++    }
++    char a[320], b[320];
++    bool ha = url_for(CONFIG_MUSE_BRAIN_URL, a, sizeof(a)), hb = url_for(CONFIG_MUSE_BRAIN_FALLBACK_URL, b, sizeof(b));
++    bool ok = false;
++    if (at_home()) {
++        ok = (ha && enroll_once(a)) || (hb && enroll_once(b));
++    } else {
++        ok = (hb && enroll_once(b)) || (ha && enroll_once(a));
++    }
++    if (!ok && !s_err[0]) {
++        set_err(ha || hb ? "Can't reach the gateway" : "No gateway");
++    }
++    ESP_LOGI(TAG, "enroll: %s%s%s", ok ? "ok" : "failed", s_err[0] ? " - " : "", s_err);
++    s_enrolling = false;
++}
++
++/* ---------- tunnel ---------- */
++
++/* The network's resolver may lie about Muse's name (fake addresses, or a blocked answer), and a wrong address
++ * is useless in the tunnel, so while the tunnel is up names are looked up through it. */
++static ip_addr_t s_old_dns[2];
++static bool s_dns_swapped;
++
++static void dns_through_tunnel(void)
++{
++    ip_addr_t want[2];
++    ipaddr_aton("1.1.1.1", &want[0]);
++    ipaddr_aton("8.8.8.8", &want[1]);
++    LOCK_TCPIP_CORE();
++    if (!s_dns_swapped) {
++        for (int i = 0; i < 2; i++) {
++            s_old_dns[i] = *dns_getserver(i);
++        }
++        s_dns_swapped = true;
++        dns_clear_cache();   /* answers the old resolver gave (fake addresses) are no use in the tunnel */
++    }
++    for (int i = 0; i < 2; i++) {
++        if (!ip_addr_cmp(dns_getserver(i), &want[i])) {
++            dns_setserver(i, &want[i]);
++        }
++    }
++    UNLOCK_TCPIP_CORE();
++}
++
++static void dns_restore(void)
++{
++    if (s_dns_swapped) {
++        LOCK_TCPIP_CORE();
++        for (int i = 0; i < 2; i++) {
++            dns_setserver(i, &s_old_dns[i]);
++        }
++        dns_clear_cache();
++        UNLOCK_TCPIP_CORE();
++        s_dns_swapped = false;
++    }
++}
++
++static bool peer_up(void)
++{
++    LOCK_TCPIP_CORE();
++    bool up = esp_wireguard_peer_is_up(&s_ctx) == ESP_OK;
++    UNLOCK_TCPIP_CORE();
++    return up;
++}
++
++static void tear_down(void)
++{
++    if (s_up) {
++        dns_restore();
++        LOCK_TCPIP_CORE();
++        esp_wireguard_disconnect(&s_ctx);
++        UNLOCK_TCPIP_CORE();
++        s_up = false;
++        ESP_LOGI(TAG, "tunnel down");
++    }
++}
++
++static bool bring_up(void)
++{
++    s_state = MUSE_WG_S_CONNECTING;
++    ensure_clock();
++    s_cfg = (wireguard_config_t)ESP_WIREGUARD_CONFIG_DEFAULT();
++    s_cfg.private_key = s_priv;
++    s_cfg.public_key = s_srv;
++    s_cfg.address = s_addr;
++    s_cfg.netmask = s_mask;
++    s_cfg.endpoint = s_ep;
++    s_cfg.port = s_port;
++    s_cfg.persistent_keepalive = s_keep;
++    if (!s_ctx_ready) {
++        LOCK_TCPIP_CORE();
++        esp_err_t ierr = esp_wireguard_init(&s_cfg, &s_ctx);
++        UNLOCK_TCPIP_CORE();
++        if (ierr != ESP_OK) {
++            set_err("WireGuard init failed");
++            return false;
++        }
++        s_ctx_ready = true;
++    } else {
++        s_ctx.config = &s_cfg;
++    }
++    esp_err_t err = ESP_ERR_RETRY;
++    for (int i = 0; i < 10 && err == ESP_ERR_RETRY; i++) {   /* the endpoint name may still be resolving */
++        LOCK_TCPIP_CORE();
++        err = esp_wireguard_connect(&s_ctx);
++        UNLOCK_TCPIP_CORE();
++        if (err == ESP_ERR_RETRY) {
++            vTaskDelay(pdMS_TO_TICKS(1000));
++        }
++    }
++    if (err != ESP_OK) {
++        set_err("Connect failed");
++        LOCK_TCPIP_CORE();
++        esp_wireguard_disconnect(&s_ctx);
++        UNLOCK_TCPIP_CORE();
++        return false;
++    }
++    LOCK_TCPIP_CORE();
++    esp_wireguard_add_allowed_ip(&s_ctx, "0.0.0.0", "0.0.0.0");
++    UNLOCK_TCPIP_CORE();
++    s_up = true;
++    for (int i = 0; i < 15; i++) {
++        if (peer_up()) {
++            LOCK_TCPIP_CORE();
++            esp_wireguard_set_default(&s_ctx);
++            UNLOCK_TCPIP_CORE();
++            set_err("");
++            s_state = MUSE_WG_S_UP;
++            ESP_LOGI(TAG, "tunnel up (%s)", s_addr);
++            dns_through_tunnel();
++            ESP_LOGI(TAG, "Muse through the tunnel: %s", muse_reachable() ? "reachable" : "NOT reachable");
++            return true;
++        }
++        vTaskDelay(pdMS_TO_TICKS(1000));
++    }
++    set_err(clock_ok() ? "No answer from server" : "Clock not set");
++    tear_down();
++    return false;
++}
++
++static void task(void *arg)
++{
++    (void)arg;
++    char last_ssid[MUSE_SSID_MAX + 1] = "";
++    int64_t last_probe = 0, retry_at = 0, auto_enroll_at = 0;
++    for (;;) {
++        vTaskDelay(pdMS_TO_TICKS(3000));
++        /* Not set up yet: ask for the peer details by itself (once, then every 5 minutes if that failed). */
++        if (!s_configured && s_mode != MUSE_WG_OFF && !s_enroll_req && sta_has_ip() && esp_timer_get_time() > auto_enroll_at) {
++            s_enroll_req = true;
++            auto_enroll_at = esp_timer_get_time() + 300LL * 1000000;
++        }
++        if (s_enroll_req && sta_has_ip()) {
++            s_enroll_req = false;
++            tear_down();   /* set-up goes through the real network */
++            do_enroll();
++            retry_at = 0;
++        }
++        if (s_mode == MUSE_WG_OFF) {
++            tear_down();
++            s_state = MUSE_WG_S_OFF;
++            continue;
++        }
++        if (!s_configured) {
++            s_state = MUSE_WG_S_NOT_SET;
++            continue;
++        }
++        if (!sta_has_ip()) {
++            s_state = MUSE_WG_S_NO_WIFI;
++            continue;
++        }
++        char ssid[MUSE_SSID_MAX + 1];
++        current_ssid(ssid, sizeof(ssid));
++        if (strcmp(ssid, last_ssid) != 0) {   /* a different network: decide again */
++            tear_down();
++            strlcpy(last_ssid, ssid, sizeof(last_ssid));
++            last_probe = 0;
++            retry_at = 0;
++        }
++        if (s_mode == MUSE_WG_AUTO && at_home()) {
++            tear_down();
++            s_state = MUSE_WG_S_HOME;
++            continue;
++        }
++        if (s_up) {
++            if (peer_up()) {
++                s_state = MUSE_WG_S_UP;
++            }
++            dns_through_tunnel();   /* a DHCP renewal puts the network's resolver back */
++            continue;
++        }
++        int64_t now = esp_timer_get_time();
++        if (retry_at && now < retry_at) {
++            continue;
++        }
++        if (s_mode == MUSE_WG_AUTO) {
++            if (last_probe && now - last_probe < PROBE_EVERY_US) {
++                continue;
++            }
++            last_probe = now;
++            if (muse_reachable()) {
++                s_state = MUSE_WG_S_DIRECT;
++                continue;
++            }
++            ESP_LOGI(TAG, "Muse not reachable directly: starting the tunnel");
++        }
++        if (!bring_up()) {
++            ESP_LOGW(TAG, "tunnel failed: %s", s_err);
++            s_state = MUSE_WG_S_FAILED;
++            retry_at = esp_timer_get_time() + RETRY_AFTER_US;
++        }
++    }
++}
++
++void muse_wg_start(void)
++{
++    load();
++    s_state = s_mode == MUSE_WG_OFF ? MUSE_WG_S_OFF : (s_configured ? MUSE_WG_S_NO_WIFI : MUSE_WG_S_NOT_SET);
++    xTaskCreate(task, "muse_wg", 12288, NULL, 3, NULL);
++}
+diff --git a/esp32/components/muse/muse_wg.h b/esp32/components/muse/muse_wg.h
+new file mode 100644
+index 0000000..2789b9f
+--- /dev/null
++++ b/esp32/components/muse/muse_wg.h
+@@ -0,0 +1,41 @@
++/*
++ * Local addition: a WireGuard tunnel so Muse's server can be reached from a network that
++ * blocks it. The tunnel is brought up only when needed ("Auto": Muse does not answer a quick
++ * TCP connect) or always, and never on the home Wi-Fi. The device makes its own key pair; the
++ * gateway hands out the peer details (POST /wg/enroll) and a person approves the public key
++ * on the WireGuard server. WireGuard code: esphome/wireguard (BSD-3-Clause).
++ */
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++
++typedef enum {
++    MUSE_WG_OFF,
++    MUSE_WG_AUTO,     /* tunnel only when Muse cannot be reached directly */
++    MUSE_WG_ALWAYS,
++} muse_wg_mode_t;
++
++typedef enum {
++    MUSE_WG_S_OFF,
++    MUSE_WG_S_NOT_SET,     /* no configuration yet */
++    MUSE_WG_S_NO_WIFI,
++    MUSE_WG_S_HOME,        /* on the home Wi-Fi: never needed */
++    MUSE_WG_S_DIRECT,      /* Auto, and Muse answers directly */
++    MUSE_WG_S_CONNECTING,
++    MUSE_WG_S_UP,
++    MUSE_WG_S_FAILED,
++} muse_wg_state_t;
++
++void muse_wg_start(void);   /* after settings and Wi-Fi are up; starts the manager task */
++muse_wg_mode_t muse_wg_mode(void);
++void muse_wg_set_mode(muse_wg_mode_t m);
++muse_wg_state_t muse_wg_state(void);
++const char *muse_wg_state_name(muse_wg_state_t s);
++bool muse_wg_configured(void);                   /* key pair and peer details present */
++void muse_wg_public_key(char out[48]);           /* base64, empty before the first set-up */
++void muse_wg_address(char out[20]);              /* the tunnel address, empty before set-up */
++void muse_wg_enroll(void);                       /* make a key pair if missing, ask the gateway for the peer details */
++bool muse_wg_enrolling(void);
++const char *muse_wg_last_error(void);            /* short text of the last set-up or connect failure, or "" */
++void muse_wg_forget(void);                       /* delete the key and the peer details */
 diff --git a/esp32/main/app.c b/esp32/main/app.c
 index b7f076d..357cedf 100644
 --- a/esp32/main/app.c
@@ -24721,3 +25948,12 @@ index 465c904..84a87df 100644
          uint64_t t0 = esp_timer_get_time();
          session_result_t result = run_session(&stack);
          uint64_t up_ms = (esp_timer_get_time() - t0) / 1000;
+diff --git a/esp32/partitions_muse.csv b/esp32/partitions_muse.csv
+index ed4e0c8..99f72db 100644
+--- a/esp32/partitions_muse.csv
++++ b/esp32/partitions_muse.csv
+@@ -25,3 +25,4 @@ ota_0,     app,  ota_0,   0x20000,  4M,
+ ota_1,     app,  ota_1,   0x420000, 4M,
+ prod_data, data, 0x40,    0x820000, 0x1000,
+ prod_bak,  data, 0x41,    0x821000, 0x1000,
++avatar,    data, 0x42,    0x830000, 0x100000,
