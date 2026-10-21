@@ -1,151 +1,227 @@
 # muse-gadget-cloud
 
-给 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 的 ESP32 设备（目前适配 **Waveshare ESP32-S3-Touch-AMOLED-1.75C** 圆屏）加上：
+**English** · [中文](README.zh-CN.md)
 
-- **不用自己的服务器**：识别、语音合成放在你自己的免费 Cloudflare 账号和 Azure 账号上。
-- **三种回答者**：Muse 自己的助手，或一个你接入的 Webhook 机器人（Grok Bot），在圆屏的设置里切换。
-- **连不上 Muse 的网络里也能用**：设备自带 WireGuard，只在需要时连到你自己的一台海外服务器。
-- 眼睛头像（会眨眼、跟着手指和倾斜转动）、可换的头像（包括你自己的圆形图）、等待计时圈、干净的主屏、`display.show_text` 提词器、所有消息推送……（完整列表见 [docs/FIRMWARE.md](docs/FIRMWARE.md)）。
+Add-ons for Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) firmware on an ESP32 device (currently the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** round touch screen). With it you get:
 
-这是个人项目，不是官方的，没有经过 Meta 审核。使用 Muse 需要你自己的 SDK token，并遵守 [Gadget SDK Terms](https://gadgets.muse.ai)。你的语音和对话内容会发给你选择的云服务商，这与只用 Muse 自己的云不同。
+- **No server of your own.** Speech recognition and speech synthesis run on your own free Cloudflare and Azure accounts.
+- **Several ways to answer.** Muse's own assistant, or a Webhook bot you connect (called the "Grok Bot" here). You switch between them in the device's settings.
+- **Use it where Muse is blocked.** The device has a WireGuard client built in and connects to a server of yours only when it has to.
+- Also in the firmware: an eyes avatar that blinks and follows your finger and the tilt of the board, a choice of avatars (including a picture of your own), a waiting ring, a clean main screen, a `display.show_text` teleprompter, and spoken push messages. The full list is in [docs/FIRMWARE.md](docs/FIRMWARE.md) (Chinese).
 
-## 这个仓库里有什么
+This is a personal project, not an official one, and Meta has not reviewed it. Using Muse needs your own SDK token and you must follow the [Gadget SDK Terms](https://gadgets.muse.ai). Your voice and conversations go to the cloud services you choose, which is different from using Muse's own cloud alone.
 
-| 路径 | 是什么 |
+> **Language of the documents.** This README is in English and in Chinese. The pages under `docs/` are in Chinese only for now. The settings file `muse-cloud.example.toml` and the tool `tools/muse-cloud.py` are in English.
+
+## What is in this repository
+
+| Path | What it is |
 |---|---|
-| `muse-cloud.example.toml` | **一个配置文件**：网关和固件的所有设置都在这里 |
-| `tools/muse-cloud.py` | 读这个配置，一条命令部署网关、一条命令编译（和刷写）固件 |
-| `worker/` | **Cloudflare 网关**（纯云端版）：识别、合成、Grok Bot、WireGuard 登记、头像、设置页 |
-| `firmware/muse-cloud.patch` | 给上游 Muse 固件（提交 `fa07304`）打的补丁 |
-| `worker-home/`、`home/` | 另一种部署：跑在家里服务器上的完整版网关（多家云服务商、本地识别、大模型），见 [docs/HOME-SERVER.md](docs/HOME-SERVER.md) |
-| `docs/` | [GATEWAY.md](docs/GATEWAY.md) 网关细节 · [FIRMWARE.md](docs/FIRMWARE.md) 固件功能和手工编译 · [wireguard-server.md](docs/wireguard-server.md) 搭 WireGuard 服务器 · [HOME-SERVER.md](docs/HOME-SERVER.md) 家里版 |
+| `muse-cloud.example.toml` | **One settings file** for the gateway and the firmware |
+| `tools/muse-cloud.py` | Reads that file: one command deploys the gateway, one command builds (and flashes) the firmware |
+| `worker/` | The **Cloudflare gateway** (cloud-only edition): recognition, synthesis, Grok Bot, WireGuard enrolment, the avatar picture, a settings page |
+| `firmware/muse-cloud.patch` | A patch for the upstream Muse firmware, commit `fa07304` |
+| `worker-home/`, `home/` | The other setup: a fuller gateway for a server at home (more cloud providers, local recognition, a language model). See [docs/HOME-SERVER.md](docs/HOME-SERVER.md) |
+| `docs/` | [GATEWAY.md](docs/GATEWAY.md) gateway details · [FIRMWARE.md](docs/FIRMWARE.md) firmware features and manual build · [wireguard-server.md](docs/wireguard-server.md) setting up the WireGuard server · [HOME-SERVER.md](docs/HOME-SERVER.md) the home server edition |
 
-**固件和网关在同一个仓库里**，因为它们是一对：固件和网关之间有一套约定（设备令牌与管理令牌、`/chat` 的 503 和错误标记、`/wg/enroll`、`/avatar`），改一边就要改另一边。放在一起，一次提交就能保持它们互相兼容，你拿到的永远是一对能配合的版本。
+**The firmware and the gateway are in one repository on purpose.** They are a pair. They share a set of conventions (a device token and an admin token, the `503` and the error marker that `/chat` returns, `/wg/enroll`, `/avatar`), and a change on one side needs a change on the other. In one repository a single commit keeps them compatible, so what you download always works together.
 
 ```mermaid
 flowchart LR
-  board["<b>ESP32-S3 板子</b><br/>麦克风 → 固件 → 喇叭 + 屏幕"]
-  gw["<b>你的 Cloudflare Worker</b><br/>/stt  /tts  /chat<br/>设置页 /admin"]
-  asr["语音识别<br/>Cloudflare Whisper / Azure"]
-  tts["语音合成<br/>Azure Speech"]
-  bot["Grok Bot<br/>（Webhook，答案回调到网关）"]
-  muse["Muse 云端"]
-  wg["你的 WireGuard 服务器<br/>（可选）"]
-  board -->|"① 录音"| gw --> asr
-  board -->|"② 一句文字 → MP3"| gw --> tts
-  board -->|"③ 选了 Grok Bot"| gw --> bot
-  board -->|"④ 选了 Muse：文字直接发给 Muse"| muse
-  board -.->|"网络连不上 Muse 或网关时"| wg -.-> muse
+  board["<b>ESP32-S3 board</b><br/>microphone → firmware → speaker + screen"]
+  gw["<b>Your Cloudflare Worker</b><br/>/stt  /tts  /chat<br/>settings page /admin"]
+  asr["Speech recognition<br/>Cloudflare Whisper / Azure"]
+  tts["Speech synthesis<br/>Azure Speech"]
+  bot["Grok Bot<br/>(Webhook; answer comes back to the gateway)"]
+  muse["Muse cloud"]
+  wg["Your WireGuard server<br/>(optional)"]
+  board -->|"1. recording"| gw --> asr
+  board -->|"2. one sentence of text → MP3"| gw --> tts
+  board -->|"3. if Grok Bot is chosen"| gw --> bot
+  board -->|"4. if Muse is chosen: the text goes straight to Muse"| muse
+  board -.->|"when the network blocks Muse or the gateway"| wg -.-> muse
 ```
 
-## 开始之前要准备的
+## Which setup do you want?
 
-| 东西 | 说明 |
+| | **Cloud-only** (this README) | **Home server** |
+|---|---|---|
+| Runs on | A free Cloudflare account | A server at home (the same code, run locally) |
+| Needs | Cloudflare + Azure accounts | A server, and ideally a public address for use away from home |
+| Recognition | Cloudflare Whisper (free) or Azure | More: Alibaba, Volcano Engine, a local SenseVoice |
+| Language model | None | Yes (any OpenAI-compatible service) |
+| Who can answer | Muse, Grok Bot | Muse, Grok Bot, the model |
+| Setup effort | Four commands | Much more; see [docs/HOME-SERVER.md](docs/HOME-SERVER.md) |
+
+If you are unsure, take the cloud-only setup.
+
+## Before you start
+
+| What | Details |
 |---|---|
-| 板子 | Waveshare ESP32-S3-Touch-AMOLED-1.75C，一根 USB-C 数据线 |
-| Muse | 一个 Muse 账号，和你的 **SDK token**（在 [gadgets.muse.ai](https://gadgets.muse.ai) 取，`mgst_` 开头共 48 个字符） |
-| Cloudflare | 一个免费账号（网关跑在这里） |
-| Azure | 一个 Speech 资源（免费档 F0 就够）的**密钥**和**区域**（比如 `eastasia`），语音合成用它 |
-| 电脑上 | Python 3.8+、Node.js（脚本通过 `npx wrangler` 部署）、git、[ESP-IDF 6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) |
-| Grok Bot | **可选**。一个接收 Webhook、过一会儿把答案 POST 回来的机器人。不用的话，Answers 里只有 Muse |
-| WireGuard 服务器 | **可选**。只有你的网络连不上 Muse 或 Cloudflare 时才需要：一台海外 Linux 服务器，见 [docs/wireguard-server.md](docs/wireguard-server.md) |
+| The board | A Waveshare ESP32-S3-Touch-AMOLED-1.75C and a USB-C **data** cable (a charge-only cable will not work) |
+| A Muse account and SDK token | The token comes from [gadgets.muse.ai](https://gadgets.muse.ai). It is 48 characters: `mgst_` followed by 43 more. See below |
+| A Cloudflare account | Free. See below |
+| An Azure Speech resource | The free F0 tier is enough. You need its **key** and **region**. See below |
+| On your computer | macOS or Linux, Python 3.8 or newer, Node.js (the tool runs `npx wrangler`), git, and [ESP-IDF 6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) |
+| A Grok Bot | **Optional.** A bot that accepts a Webhook and POSTs its answer back later. Without one, Answers offers only Muse. See below |
+| A WireGuard server | **Optional.** Only needed if your network cannot reach Muse or Cloudflare. A Linux server abroad; see [docs/wireguard-server.md](docs/wireguard-server.md) |
 
-## 用法：四步
+I did not click through the sign-up pages of these services again while writing this, so the descriptions below are from what I know and may be out of date. Where it matters I say so.
+
+### The Muse SDK token
+
+Sign in at [gadgets.muse.ai](https://gadgets.muse.ai), accept the terms, and copy your token. The firmware build checks the token itself: it must be exactly 48 characters, start with `mgst_`, and end in one of the characters `A E I M Q U Y c g k o s w 0 4 8`. If you paste it wrong the build stops with "CONFIG_GADGET_SDK_TOKEN is not a valid SDK token". `tools/muse-cloud.py check` tells you the same before you build.
+
+### The Cloudflare account
+
+Create a free account at [dash.cloudflare.com](https://dash.cloudflare.com). You do not create anything by hand: `tools/muse-cloud.py gateway` logs in through your browser, creates a small KV store for the settings, and deploys the Worker. The Worker uses Workers AI (Whisper) and Durable Objects, both of which exist on the free plan; see [docs/GATEWAY.md](docs/GATEWAY.md) for the limits.
+
+### The Azure Speech resource
+
+In the [Azure portal](https://portal.azure.com) create a resource of type **Speech** (also listed as "Azure AI Speech" or under "AI Services"), choose the **Free F0** pricing tier, pick a region close to you (for example `eastasia`, `westeurope`, `eastus`), and after it is created open **Keys and Endpoint** to copy one key. Put the key and the region name (`eastasia`, not a URL) in `muse-cloud.toml`. The free tier covers about 5 hours of recognition and 500,000 characters of synthesis a month; check [Azure's pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/speech-services) for the current numbers.
+
+### ESP-IDF 6.0.1
+
+Follow Espressif's [get started guide](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) for the ESP32-S3 and install version **6.0.1** (other versions are not tested). The tool expects it at `~/esp/esp-idf-v6.0.1`; if yours is elsewhere, set `idf_path` in `muse-cloud.toml`.
+
+### A Grok Bot (optional)
+
+Any agent that can receive an HTTPS Webhook and make an HTTPS request will do. The contract is small:
+
+1. The gateway sends `POST <your webhook address>` with `Authorization: Bearer <your auth>` and a JSON body `{"message": "<what you said>\n\n(instructions…)"}`. The instructions in the message tell the bot where to send the answer.
+2. The bot answers by sending `POST https://<your-worker>.workers.dev/bot-reply/<id>/<one-time token>` with the body `{"reply": "<the answer>"}` and `Content-Type: application/json`. No other header or key is needed; the address works once and for 10 minutes. The bot copies the address from the message.
+3. The gateway keeps the connection to the device open for up to 270 seconds and speaks the answer when it arrives. Before that it makes the device say "got it, asking" so you are not left in silence.
+4. If the bot has a list of outside addresses it may call, add your `*.workers.dev` host to it. Otherwise the Webhook goes out but the answer is blocked, and the gateway waits the full 270 seconds and then says the bot did not answer.
+
+I tested this with a real Webhook bot (a Cursor automation). I did not write or test a stand-alone example bot, so there is no sample server code here.
+
+The Webhook address must be `https://` on a public host name; the gateway refuses anything else.
+
+## Usage: four steps
 
 ```bash
 git clone https://github.com/burndown/muse-gadget-cloud.git
 cd muse-gadget-cloud
 ```
 
-**第 1 步：生成配置文件**
+**Step 1: make the settings file**
 
 ```bash
 python3 tools/muse-cloud.py init
 ```
 
-它把 `muse-cloud.example.toml` 复制成 `muse-cloud.toml`（权限 600，已在 `.gitignore` 里，**不要提交**），并生成两个随机令牌：设备令牌（会写进固件）和管理令牌（只在你的浏览器里）。
+This copies `muse-cloud.example.toml` to `muse-cloud.toml` (permissions 600; it is in `.gitignore`; **never commit it**) and generates two random tokens: a device token (it goes into the firmware) and an admin token (only for your browser).
 
-**第 2 步：填写 `muse-cloud.toml`**
+**Step 2: fill in `muse-cloud.toml`**
 
-用文本编辑器打开，每一项上面都有说明。最少要填这几个：
+Open it in a text editor. Every setting has an explanation above it. These are the ones you must fill in:
 
-| 位置 | 填什么 |
+| Setting | What to put |
 |---|---|
-| `[muse] sdk_token` | 你的 Muse SDK token |
-| `[speech] azure_key`、`azure_region` | Azure Speech 的密钥和区域 |
-| `[speech] recognition` | `"cloudflare"`（免费，不要密钥，默认）或 `"azure"` |
+| `[muse] sdk_token` | Your Muse SDK token |
+| `[speech] azure_key`, `azure_region` | Your Azure Speech key and region name |
+| `[speech] recognition` | `"cloudflare"` (free, no key; the default) or `"azure"` |
 
-可选的：`[bot]` 填 Grok Bot 的 Webhook 地址和授权；`[wireguard]` 把 `enabled` 改成 `true`，填服务器地址、端口和服务器公钥。然后运行：
+Optional: `[bot]` takes the Grok Bot's Webhook address and auth; in `[wireguard]` set `enabled = true` and fill in the server's address, port and public key. Then run:
 
 ```bash
-python3 tools/muse-cloud.py check        # 告诉你还缺什么
+python3 tools/muse-cloud.py check        # tells you what is still missing
 ```
 
-**第 3 步：部署网关**
+**Step 3: deploy the gateway**
 
 ```bash
 python3 tools/muse-cloud.py gateway
 ```
 
-它依次：登录 Cloudflare（会开浏览器）→ 建一个存设置的 KV → 设置两个令牌 → 部署 Worker（带 Workers AI 和 Durable Object 绑定）→ 把你的 Azure、Bot、WireGuard 设置推送进去。结束时它会打印 Worker 的地址并写进 `muse-cloud.toml`。之后用 `python3 tools/muse-cloud.py status` 随时检查。
+It logs in to Cloudflare (a browser window opens), creates a KV store for the settings, sets the two tokens, deploys the Worker (with its Workers AI and Durable Object bindings) and pushes your Azure, bot and WireGuard settings into it. At the end it prints the Worker's address and writes it into `muse-cloud.toml`. You can run it again at any time; it is safe to repeat. `python3 tools/muse-cloud.py status` checks the gateway later.
 
-设置页：`https://<你的worker>.workers.dev/admin?k=<管理令牌>`，每一项有“测试”按钮。如果用了 Grok Bot，要在机器人的“允许访问的外部地址”里加上你的 `*.workers.dev` 域名，否则它的答案送不回来。
+The settings page is `https://<your-worker>.workers.dev/admin?k=<admin token>`. Every setting there has a **Test** button.
 
-**第 4 步：编译并刷固件**
+**Step 4: build and flash the firmware**
 
 ```bash
-python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # 串口名按你的电脑填
+python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # use your own serial port
 ```
 
-它依次：取上游固件并检出指定提交 → 打补丁 → 把 `muse-cloud.toml` 变成编译设置 → 用 ESP-IDF 编译 → 刷机。第一次编译要下载组件，需要几分钟。如果开了 WireGuard 且还没有密钥，它会为这台设备生成密钥对，并打印**一行要在 WireGuard 服务器上执行的命令**（先执行，再刷机，设备开机就能连上）。
+It fetches the upstream firmware at the pinned commit, applies the patch, turns `muse-cloud.toml` into build settings, builds with ESP-IDF, and flashes. The first build downloads components and takes several minutes. If WireGuard is on and the device has no key yet, it makes a key pair for this device and prints **one command to run on the WireGuard server** (run it before the first start, and the device connects as soon as it boots).
 
-不加 `--flash` 就只编译。esptool 连不上时：按住 BOOT，点一下 RST，再松开 BOOT，进入下载模式。第一次刷要把引导程序、分区表和应用一起刷（脚本就是这样做的）。
+Without `--flash` it only builds. If esptool cannot connect, put the board in download mode: hold BOOT, tap RST, release BOOT. The first flash writes the bootloader, partition table and application together (the tool does this), because the partition table has a new partition for the avatar picture.
 
-刷好后，在 Muse App 里配对。
+### Pairing the device
 
-## 遇到问题时
+1. After flashing, the screen waits for pairing and the board advertises over Bluetooth as `MuseGadget-` followed by the last six hex digits of its Wi-Fi MAC address (for example `MuseGadget-4245C0`).
+2. In the Muse app, add the gadget, choose that device, and send it your Wi-Fi name and password. The device then joins Wi-Fi and connects to Muse.
+3. If pairing does not start or you want to start over, the device's log says `long-press reset to pair again`; see the upstream firmware's documentation for the exact button on your board.
+4. Pairing can be lost after a flash, especially if the previous firmware kept restarting. Pair again; you do not need to rebuild.
 
-- **设备不停重启**：看串口日志（115200）。如果你自己改过编译设置，先确认没有关掉 `ESP_NETIF_BRIDGE_EN`（固件现在会强制打开它）。把 `build/` 目录删掉重新跑 `firmware` 是安全的。
-- **刷机后设备要重新配对**：偶尔会发生，尤其是前一个固件反复重启过。在 Muse App 里重新配对即可，不用重新编译。
-- **不要用旧的闪存备份恢复配对**：重新配对会让 Muse 账号作废旧的令牌。如果你擦除前备份了 NVS 分区，在新配对之后再把它写回去，设备会带着旧令牌被 Muse 拒绝（日志里是 `HTTP 401`），固件会清除配对，要再配一次。备份只对 Wi-Fi 和菜单设置有用，对配对没用。
-- **`firmware` 报 SDK token 无效**：token 是 48 个字符，`mgst_` 加 43 个，最后一个字符有限制；从 [gadgets.muse.ai](https://gadgets.muse.ai) 重新复制。
-- **`gateway` 报 Cloudflare 的 1010 或连不上**：从有些网络直接访问 `workers.dev` 会时好时坏，重新运行即可（脚本是可重复运行的）。
-- **Grok Bot 一直说“没有回话”**：机器人的“允许访问的外部地址”里没有你的 `*.workers.dev` 域名。
+I wrote these steps from what I saw during my own tests. I have not done the first pairing of a brand-new out-of-the-box board, only of one whose flash I had erased.
 
-## 在设备上怎么用
+## On the device
 
-- **按住说话**，松手后设备会识别、再交给你选的回答者，念出答案。
-- 圆屏**左右滑进入设置**：
-  - **Answers**：Muse，或 Grok Bot（默认 Muse）。选 Muse 时文字直接发给 Muse；选 Grok Bot 时先念一句“收到，我去问小黑”，等机器人回答；机器人没回话或联系不上，屏幕显示错误，**不会**换别的回答者接手。
-  - **WireGuard**：Off / Auto / Always。Auto 只在连不上 Muse 或网关时才拉起隧道；如果你在 `[firmware] home_ssid` 里填了家里 Wi-Fi 的名字，在那个 Wi-Fi 上永远不拉。
-  - **Avatar**：Eyes / Pixel Muse / Picture（你自己的圆形图，用 `tools/make-avatar-img.py` 做并上传（上传要用管理令牌），在设置里点 Get picture）。
-- 主屏平时是干净的：状态图标、按键提示碰一下才出现。
+- **Hold to talk**, release, and the device recognises what you said, hands it to the answerer you chose, and speaks the reply.
+- **Swipe left or right** to open the settings:
+  - **Answers**: Muse, or Grok Bot (default Muse). With Muse, the text goes straight to Muse. With Grok Bot, the device first says "got it, I'll ask", then waits for the bot. If the bot does not answer or cannot be reached the screen shows an error. **No other answerer takes over.**
+  - **WireGuard**: Off / Auto / Always. Auto starts the tunnel only when Muse or the gateway cannot be reached. If you set `[firmware] home_ssid` to your home Wi-Fi's name, Auto never starts it on that network.
+  - **Avatar**: Eyes / Pixel Muse / Picture (a round picture of your own: make it with `tools/make-avatar-img.py` and upload it with the admin token, then tap Get picture in the settings).
+- The main screen is clean. The status icons and button hints appear only when you touch the screen.
 
-## 费用和免费额度
+## All the settings in `muse-cloud.toml`
 
-纯云端版是为免费账号设计的，但额度要自己核对最新数字，细节见 [docs/GATEWAY.md](docs/GATEWAY.md)。简单说：Cloudflare Workers 免费版每天 10 万次请求；Workers AI 的 Whisper 每天约 200 分钟；Azure Speech 免费档每月识别 5 小时、合成 50 万字符。一个人日常使用远远够，但“送给很多人”时要注意每个人各部署一份。
+| Section | Setting | Meaning |
+|---|---|---|
+| `[muse]` | `sdk_token` | Your Muse SDK token |
+| `[gateway]` | `name` | The Worker's name; its address becomes `https://<name>.<account>.workers.dev` |
+| | `url` | Filled in by the gateway step; or your own domain |
+| | `device_token`, `admin_token` | Two different random strings; `init` makes them |
+| | `kv_id` | Filled in by the gateway step |
+| `[speech]` | `azure_key`, `azure_region`, `voice` | Azure Speech key, region name, and the voice (any Azure neural voice name) |
+| | `recognition`, `language` | `cloudflare` or `azure`; the language code, for example `zh-CN`, `en-US` |
+| `[bot]` | `webhook_url`, `auth`, `callback_base` | The bot's Webhook address (https) and secret; `callback_base` only if the bot must call a different address than your Worker's |
+| `[wireguard]` | `enabled`, `endpoint`, `port`, `server_public_key`, `address`, `subnet` | The tunnel; one `address` per device |
+| | `mode`, `via_tunnel` | `off`/`auto`/`always`; whether speech and chat also use the tunnel |
+| | `private_key` | Made by the firmware step |
+| `[firmware]` | `idf_path`, `upstream`, `upstream_commit`, `workdir` | Where ESP-IDF is; the upstream firmware and its pinned commit; the folder for sources and the build |
+| | `model_answers` | Keep `false` for the cloud-only setup |
+| | `home_ssid` | Your home Wi-Fi's name, if you also run a home server; empty otherwise |
 
-## 安全须知
+## When something goes wrong
 
-- `muse-cloud.toml` 里有令牌、Azure 密钥、WireGuard 私钥：**不要提交，不要发给别人**。脚本生成的 `build/` 目录里的编译设置、编译出的固件里也有设备令牌，同样不要上传。
-- 设备令牌写在固件里：谁拿到设备谁就拿到它。所以它**只能**用于识别、合成、对话、登记和下载头像；管理（设置页、密钥、登记批准）只认管理令牌。
-- 令牌必须是长随机串；`init` 生成的就是。
+- **The device keeps restarting.** Read the serial log (115200 baud). If you edited the build settings, make sure you did not turn off `ESP_NETIF_BRIDGE_EN` (the firmware now forces it on). Deleting the `build/` folder and running `firmware` again is safe.
+- **The device needs pairing again after a flash.** It happens, especially after a firmware that kept restarting. Pair again in the Muse app.
+- **Do not restore a saved flash backup to get pairing back.** Pairing again makes Muse invalidate the old tokens. If you restore a backup of the NVS partition after a new pairing, the device is refused by Muse (`HTTP 401` in the log) and clears its pairing. A backup helps for Wi-Fi and menu settings, not for pairing.
+- **`firmware` says the SDK token is invalid.** See the token format above; copy it again from [gadgets.muse.ai](https://gadgets.muse.ai).
+- **`gateway` fails with Cloudflare error 1010, or cannot connect.** From some networks `workers.dev` is reachable only some of the time. Run the command again.
+- **The Grok Bot always says it did not answer.** Your `*.workers.dev` host is not in the bot's list of outside addresses it may call.
 
-## 验证到哪一步了（如实说明）
+## Costs and free allowances
 
-| 项 | 状态 |
+The cloud-only setup is designed for free accounts, but check the current numbers yourself (details in [docs/GATEWAY.md](docs/GATEWAY.md)): Cloudflare Workers free plan allows 100,000 requests a day; Workers AI Whisper allows about 200 minutes of audio a day; Azure Speech's free tier allows about 5 hours of recognition and 500,000 characters of synthesis a month. For one person this is far more than enough. If you share the project, each person should deploy their own copy.
+
+## Security
+
+- `muse-cloud.toml` holds tokens, the Azure key and the WireGuard private key. **Never commit it or send it to anyone.** The build settings the tool writes under `build/` and the firmware it builds also contain the device token; do not upload those either.
+- The device token is written into the firmware, so whoever has the device has it. That is why it can only be used for recognition, synthesis, chat, enrolment and downloading the picture. Managing the gateway (the settings page, keys, approving WireGuard devices) accepts only the admin token.
+- Tokens must be long random strings; the ones `init` generates are.
+
+## What has been verified (honestly)
+
+| What | Status |
 |---|---|
-| 补丁打在干净的上游 `fa07304` 上，用脚本从 `muse-cloud.toml` 生成设置，从零编译，固件里有补丁的功能和新分区 | 通过（2026-10-21，包括 WireGuard 打开的组合） |
-| `tools/muse-cloud.py` 的 `init`、`check`、`gateway`（真实部署到 Cloudflare 免费账号）、`status`、`firmware` | 通过（测试用的 Worker 已删除） |
-| 网关、WireGuard、回答者（Muse、Grok Bot；家里版还有模型）在圆圆上的完整一轮 | 通过，细节见 [docs/GATEWAY.md](docs/GATEWAY.md) 和 [docs/FIRMWARE.md](docs/FIRMWARE.md) |
-| 用脚本的 `firmware --flash` 把纯云端固件刷到圆圆上，圆圆稳定运行，选 Muse 完整一轮（识别用 Cloudflare Whisper，合成用 Azure，都经你自己的 Worker）：1 句 11 个字的问题，Muse 的回答分 20 次取语音，念了 55 秒，整轮 135 秒，设备内部内存最低 12K | 通过（2026-10-21，`wireguard.enabled = false`）。**第一次尝试失败过**：脚本漏了 `CONFIG_ESP_NETIF_BRIDGE_EN`，设备约每 4 秒重启一次，还丢了配对，要在 Muse App 里重新配对；已修（固件自己要求这个选项），第二次通过 |
-| 对一块**擦除过的全新板子**做第一次完整刷机、配对：整片闪存擦成全 0xFF，脚本从零取上游、打补丁、编译、刷机，圆圆进入配对状态；在 Muse App 里配对后，识别、Muse、合成一轮正常（整轮 39 秒，没有重启） | 通过（2026-10-21，同一块圆圆；板子是 Waveshare 1.75C，出厂数据分区本来是空的）。**没有在一块真正的出厂新板子上做过** |
-| 一个没有任何相关经历的人，只照这份文档从零做一遍 | **没有验证** |
-| 其它板子 | 没有适配 |
-| Windows 上的 `tools/muse-cloud.py firmware`（它通过 `bash` 调用 ESP-IDF 的 `export.sh`） | 没有验证，大概需要在 WSL 里用 |
+| The patch applied to a clean upstream `fa07304`, build settings generated from `muse-cloud.toml`, built from scratch; the firmware contains the patch's features and the new partition | Passed (2026-10-21, including with WireGuard on) |
+| `tools/muse-cloud.py` `init`, `check`, `gateway` (a real deployment to a free Cloudflare account), `status`, `firmware` | Passed (the test Worker was deleted afterwards) |
+| `firmware --flash` onto a real device, then a full Muse turn (recognition with Cloudflare Whisper, synthesis with Azure, both through your own Worker): 20 pieces of speech fetched, 55 s of speech, 135 s in all, lowest free internal memory 12 KB | Passed (2026-10-21, `wireguard.enabled = false`). **The first attempt failed**: the tool had left out `CONFIG_ESP_NETIF_BRIDGE_EN`, the device restarted every 4 seconds and lost its pairing. Fixed (the firmware now requires that option itself); the second attempt passed |
+| A board whose flash was **erased completely**, then built and flashed from scratch by the tool and paired: one full turn worked (39 s, no restart) | Passed (2026-10-21, on the same Waveshare 1.75C). **Not done on a truly new, out-of-the-box board** |
+| The gateway, WireGuard and the answerers (Muse, Grok Bot; the model on the home server) on the device | Passed; details in [docs/GATEWAY.md](docs/GATEWAY.md) and [docs/FIRMWARE.md](docs/FIRMWARE.md) |
+| A person with no background following only this document from scratch | **Not verified** |
+| Grok Bot answering through the device after a flash by the tool | Not verified (tested through the Worker, and on the device with the home-server build) |
+| Flashing with WireGuard on, using the tool's generated key | Not verified on a device |
+| Other boards | Not adapted |
+| Windows (the tool calls ESP-IDF's `export.sh` through `bash`) | Not verified; probably needs WSL |
 
-## 许可与致谢
+## Licence and thanks
 
-- `worker/`、`worker-home/`、`tools/` 为 MIT 许可（见 [LICENSE](LICENSE)）。
-- `firmware/muse-cloud.patch` 是对上游 Muse Gadgets SDK 的修改，遵循上游的 [Apache-2.0](https://github.com/facebookincubator/muse-gadget-sdk/blob/main/LICENSE)；其中的 16×16 中文字库数据来自 [GNU Unifont](https://unifoundry.com/unifont/) 16.0.04（GPLv2+ 带字体嵌入例外，另有 OFL-1.1 双许可）；眼睛的形状和手势改编自 [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot)（MIT）；WireGuard 用 [esphome/wireguard](https://components.espressif.com/components/esphome/wireguard)（BSD-3）；“所有消息”改编自 [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk) 的两个提交。
-- “Muse”“WireGuard”等是各自所有者的商标。各家服务商的接口写法参考了 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)（MIT）。
+- `worker/`, `worker-home/` and `tools/` are under the MIT licence (see [LICENSE](LICENSE)).
+- `firmware/muse-cloud.patch` is a modification of the upstream Muse Gadgets SDK and follows the upstream [Apache-2.0](https://github.com/facebookincubator/muse-gadget-sdk/blob/main/LICENSE) licence. The 16×16 Chinese font data in it comes from [GNU Unifont](https://unifoundry.com/unifont/) 16.0.04 (GPLv2+ with the font-embedding exception, also OFL-1.1). The eyes' shapes and gestures are adapted from [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot) (MIT). WireGuard uses [esphome/wireguard](https://components.espressif.com/components/esphome/wireguard) (BSD-3). "All messages" is adapted from two commits of [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk).
+- "Muse" and "WireGuard" are trademarks of their owners. The providers' API usage was informed by [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) (MIT).
