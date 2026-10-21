@@ -304,7 +304,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..b2f94ca 100644
+index 2866f5d..84f0647 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -400,7 +400,7 @@ index 2866f5d..b2f94ca 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1027,508 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1027,507 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -553,11 +553,11 @@ index 2866f5d..b2f94ca 100644
 +    if (s_brain.muse_down) {
 +        cJSON_AddTrueToObject(body, "muse_down");   /* the brain answers with its fallback provider */
 +    }
-+    if (!at_home() && muse_settings_away_mode() == 1) {
-+        cJSON_AddTrueToObject(body, "away");   /* away from the home Wi-Fi: the gateway hands the question to the Grok Bot */
-+    } else if (!at_home() && muse_settings_away_mode() == 2) {
-+        cJSON_AddTrueToObject(body, "gemini"); /* away, and asked to use the model: no Muse, no bot */
-+    }   /* away with Muse chosen: asked like at home (the gateway answers 503, the device asks Muse) */
++    if (muse_settings_away_mode() == 1) {
++        cJSON_AddTrueToObject(body, "away");   /* Grok Bot chosen (Settings > Answers): the gateway hands the question to the bot */
++    } else if (muse_settings_away_mode() == 2) {
++        cJSON_AddTrueToObject(body, "gemini"); /* Gemini chosen: no Muse, no bot */
++    }   /* Muse chosen: the gateway answers 503 and the device asks Muse */
 +    char *json = cJSON_PrintUnformatted(body);
 +    cJSON_Delete(body);
 +    const char *urls[2] = { CONFIG_MUSE_BRAIN_URL, nullptr };
@@ -600,7 +600,7 @@ index 2866f5d..b2f94ca 100644
 +    if (gen == s_brain.gen) {
 +        s_brain.state = got ? B_DONE : B_FAILED;
 +    }
-+    vTaskDelete(nullptr);
++    vTaskDeleteWithCaps(nullptr);   /* its stack is in PSRAM */
 +}
 +
 +static bool brain_start(const char *text, bool muse_down = false)
@@ -618,16 +618,15 @@ index 2866f5d..b2f94ca 100644
 +    if (text != s_brain.text) {
 +        strlcpy(s_brain.text, text, sizeof(s_brain.text));
 +    }
-+    if (!muse_down && !at_home() && muse_settings_away_mode() != 0) {
-+        /* Away from home Muse is usually out of reach: the brain answers at once, without Muse being asked first
-+         * (and without a long wait for a connection that will not come). */
++    if (!muse_down && muse_settings_away_mode() != 0) {
++        /* Grok Bot or Gemini chosen: the brain answers at once, without Muse being asked first. */
 +        muse_down = true;
-+        ESP_LOGI(TAG, "away from home: the brain answers, Muse is not asked");
++        ESP_LOGI(TAG, "answers by the %s: Muse is not asked", muse_settings_away_mode() == 1 ? "Grok Bot" : "model");
 +    }
 +    s_brain.muse_down = muse_down;
 +    s_brain.gen = s_turn.gen;
 +    s_brain.state = B_RUN;
-+    if (xTaskCreate(brain_task, "brain", 6144, (void *)(uintptr_t)s_turn.gen, 4, nullptr) != pdPASS) {
++    if (xTaskCreateWithCaps(brain_task, "brain", 6144, (void *)(uintptr_t)s_turn.gen, 4, nullptr, MALLOC_CAP_SPIRAM) != pdPASS) {
 +        s_brain.state = B_IDLE;
 +        return false;
 +    }
@@ -806,7 +805,7 @@ index 2866f5d..b2f94ca 100644
 +    }
 +    ESP_LOGI(TAG, "stt: %s, %u chars", ok ? "ok" : "failed", (unsigned)strlen(s_stt.text));
 +    s_stt.state = ok ? S_READY : S_FAILED;
-+    vTaskDelete(nullptr);
++    vTaskDeleteWithCaps(nullptr);   /* its stack is in PSRAM */
 +}
 +
 +/* Whether this turn is recognised locally; makes sure the recording buffer exists. */
@@ -843,7 +842,7 @@ index 2866f5d..b2f94ca 100644
 +    }
 +    s_stt.gen = s_turn.gen;
 +    s_stt.state = S_BUSY;
-+    if (xTaskCreate(stt_task, "stt", 8192, nullptr, 4, nullptr) != pdPASS) {
++    if (xTaskCreateWithCaps(stt_task, "stt", 8192, nullptr, 4, nullptr, MALLOC_CAP_SPIRAM) != pdPASS) {
 +        s_stt.state = S_IDLE;
 +        turn_fail("CAN'T HEAR");
 +        return true;
@@ -911,7 +910,7 @@ index 2866f5d..b2f94ca 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1730,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1729,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -947,7 +946,7 @@ index 2866f5d..b2f94ca 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1950,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +1949,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -1005,7 +1004,7 @@ index 2866f5d..b2f94ca 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2014,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2013,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -1029,7 +1028,7 @@ index 2866f5d..b2f94ca 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2103,248 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2102,248 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1103,7 +1102,7 @@ index 2866f5d..b2f94ca 100644
 +    free(json);
 +    ESP_LOGI(TAG, "tts fetch: %s, %u bytes", ok ? "ok" : "failed", (unsigned)s_fetch.len);
 +    s_fetch.state = ok ? F_READY : F_FAILED;
-+    vTaskDelete(nullptr);
++    vTaskDeleteWithCaps(nullptr);   /* its stack is in PSRAM */
 +}
 +
 +/* Starts fetching speech for text[0..n); false if it can't (the caller stays silent). */
@@ -1129,7 +1128,7 @@ index 2866f5d..b2f94ca 100644
 +    s_fetch.len = s_fetch.fed = 0;
 +    s_fetch.gen = s_turn.gen;
 +    s_fetch.state = F_FETCHING;
-+    if (xTaskCreate(tts_fetch_task, "tts_fetch", 8192, nullptr, 4, nullptr) != pdPASS) {
++    if (xTaskCreateWithCaps(tts_fetch_task, "tts_fetch", 8192, nullptr, 4, nullptr, MALLOC_CAP_SPIRAM) != pdPASS) {
 +        s_fetch.state = F_IDLE;
 +        return false;
 +    }
@@ -1295,7 +1294,7 @@ index 2866f5d..b2f94ca 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2404,39 @@ static void decode(void)
+@@ -1598,6 +2403,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1335,7 +1334,7 @@ index 2866f5d..b2f94ca 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2516,9 @@ static void check_turn(void)
+@@ -1677,6 +2515,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1345,7 +1344,7 @@ index 2866f5d..b2f94ca 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2727,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2726,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1374,7 +1373,7 @@ index 2866f5d..b2f94ca 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2800,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2799,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1387,7 +1386,7 @@ index 2866f5d..b2f94ca 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2819,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2818,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1397,7 +1396,7 @@ index 2866f5d..b2f94ca 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2828,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2827,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1426,7 +1425,7 @@ index 2866f5d..b2f94ca 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2872,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2871,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1435,7 +1434,7 @@ index 2866f5d..b2f94ca 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2890,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2889,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1445,7 +1444,7 @@ index 2866f5d..b2f94ca 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +2998,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +2997,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1462,7 +1461,7 @@ index 2866f5d..b2f94ca 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3040,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3039,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
@@ -24128,7 +24127,7 @@ index 0000000..b6d14a0
 +}
 +#endif
 diff --git a/esp32/components/muse/muse_settings.c b/esp32/components/muse/muse_settings.c
-index 4b0dda9..667df67 100644
+index 4b0dda9..7c90426 100644
 --- a/esp32/components/muse/muse_settings.c
 +++ b/esp32/components/muse/muse_settings.c
 @@ -34,6 +34,10 @@ static const char *TAG = "muse_settings";
@@ -24147,7 +24146,7 @@ index 4b0dda9..667df67 100644
      .volume = CONFIG_MUSE_DEFAULT_VOLUME,
      .speaker_on = true,
 +    .eyes_on = true,
-+    .away_mode = 1,
++    .away_mode = 0,
      .mic_gain = 30,
      .brightness = 100,
      .sleep_s = 120,
@@ -24251,7 +24250,7 @@ index 705a5cb..972ca0d 100644
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..b4cabb9 100644
+index 6a372ac..206e978 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
 @@ -31,12 +31,14 @@
@@ -24390,13 +24389,13 @@ index 6a372ac..b4cabb9 100644
 +{
 +    static const char *const NAMES[] = { "Muse", "Grok Bot", "Gemini" };
 +    lv_obj_t *list;
-+    s_away = page(tile, "AWAY", true, &list);
-+    note(list, "Away from the home Wi-Fi, questions go to:");
++    s_away = page(tile, "ANSWERS", true, &list);
++    note(list, "Your questions go to:");
 +    for (int i = 0; i < 3; i++) {
 +        row(list, NULL, NAMES[i], &s_away_checks[i], on_away_choice, (void *)(intptr_t)i);
 +        lv_obj_set_style_text_color(s_away_checks[i], lv_color_hex(COLOR_ACCENT), 0);
 +    }
-+    note(list, "At home it is always Muse. Speech and recognition use the public address, not the tunnel.");
++    note(list, "Away from home, Muse is reached through WireGuard; the Grok Bot and Gemini go through the home server. Speech and recognition never use the tunnel.");
 +}
 +
 +static void tick_away(void)
@@ -24490,7 +24489,7 @@ index 6a372ac..b4cabb9 100644
      row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
      row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
      row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
-+    row(list, LV_SYMBOL_GPS, "Away", &s_home_away, on_nav, (void *)&AWAY);
++    row(list, LV_SYMBOL_GPS, "Answers", &s_home_away, on_nav, (void *)&AWAY);
 +    row(list, LV_SYMBOL_IMAGE, "Avatar", &s_home_avatar, on_nav, (void *)&AVATAR);
 +    row(list, LV_SYMBOL_UPLOAD, "WireGuard", &s_home_wg, on_nav, (void *)&WG);
      row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
@@ -25213,10 +25212,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..d62a757
+index 0000000..9f4525f
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,612 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25247,6 +25246,8 @@ index 0000000..d62a757
 +#include "lwip/tcpip.h"
 +#include "freertos/FreeRTOS.h"
 +#include "freertos/task.h"
++#include "freertos/idf_additions.h"
++#include "esp_heap_caps.h"
 +#include "mbedtls/base64.h"
 +#include "nvs.h"
 +#include "sodium/crypto_scalarmult_curve25519.h"
@@ -25364,7 +25365,7 @@ index 0000000..d62a757
 +
 +const char *muse_wg_state_name(muse_wg_state_t s)
 +{
-+    static const char *const N[] = { "Off", "Not set up", "No Wi-Fi", "Home", "Direct", "Connecting", "Connected", "Failed" };
++    static const char *const N[] = { "Off", "Not set up", "No Wi-Fi", "Home", "Direct", "Not needed", "Connecting", "Connected", "Failed" };
 +    return N[s];
 +}
 +
@@ -25586,7 +25587,6 @@ index 0000000..d62a757
 +
 +static void do_enroll(void)
 +{
-+    s_enrolling = true;
 +    set_err("");
 +    if (!s_pub[0]) {
 +        make_keys();
@@ -25604,6 +25604,14 @@ index 0000000..d62a757
 +    }
 +    ESP_LOGI(TAG, "enroll: %s%s%s", ok ? "ok" : "failed", s_err[0] ? " - " : "", s_err);
 +    s_enrolling = false;
++}
++
++/* The HTTPS request needs a big stack, which is internal RAM and scarce: it lives only as long as the request. */
++static void enroll_task(void *arg)
++{
++    (void)arg;
++    do_enroll();
++    vTaskDelete(NULL);
 +}
 +
 +/* ---------- tunnel ---------- */
@@ -25720,7 +25728,8 @@ index 0000000..d62a757
 +            s_state = MUSE_WG_S_UP;
 +            ESP_LOGI(TAG, "tunnel up (%s)", s_addr);
 +            dns_through_tunnel();
-+            ESP_LOGI(TAG, "Muse through the tunnel: %s", muse_reachable() ? "reachable" : "NOT reachable");
++            ESP_LOGI(TAG, "Muse through the tunnel: %s (stack left %u B)", muse_reachable() ? "reachable" : "NOT reachable",
++                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
 +            return true;
 +        }
 +        vTaskDelay(pdMS_TO_TICKS(1000));
@@ -25738,14 +25747,18 @@ index 0000000..d62a757
 +    for (;;) {
 +        vTaskDelay(pdMS_TO_TICKS(3000));
 +        /* Not set up yet: ask for the peer details by itself (once, then every 5 minutes if that failed). */
-+        if (!s_configured && s_mode != MUSE_WG_OFF && !s_enroll_req && sta_has_ip() && esp_timer_get_time() > auto_enroll_at) {
++        if (!s_configured && s_mode != MUSE_WG_OFF && !s_enroll_req && !s_enrolling && sta_has_ip() && esp_timer_get_time() > auto_enroll_at) {
 +            s_enroll_req = true;
 +            auto_enroll_at = esp_timer_get_time() + 300LL * 1000000;
 +        }
 +        if (s_enroll_req && sta_has_ip()) {
 +            s_enroll_req = false;
 +            tear_down();   /* set-up goes through the real network */
-+            do_enroll();
++            s_enrolling = true;
++            if (xTaskCreate(enroll_task, "wg_enroll", 8192, NULL, 3, NULL) != pdPASS) {
++                s_enrolling = false;
++                set_err("Out of memory");
++            }
 +            retry_at = 0;
 +        }
 +        if (s_mode == MUSE_WG_OFF) {
@@ -25772,6 +25785,11 @@ index 0000000..d62a757
 +        if (s_mode == MUSE_WG_AUTO && at_home()) {
 +            tear_down();
 +            s_state = MUSE_WG_S_HOME;
++            continue;
++        }
++        if (s_mode == MUSE_WG_AUTO && muse_settings_away_mode() != 0) {   /* the Grok Bot and Gemini go through the home server */
++            tear_down();
++            s_state = MUSE_WG_S_NOT_NEEDED;
 +            continue;
 +        }
 +        if (s_up) {
@@ -25808,14 +25826,14 @@ index 0000000..d62a757
 +{
 +    load();
 +    s_state = s_mode == MUSE_WG_OFF ? MUSE_WG_S_OFF : (s_configured ? MUSE_WG_S_NO_WIFI : MUSE_WG_S_NOT_SET);
-+    xTaskCreate(task, "muse_wg", 12288, NULL, 3, NULL);
++    xTaskCreateWithCaps(task, "muse_wg", 6144, NULL, 3, NULL, MALLOC_CAP_SPIRAM);   /* no flash work here: the stack can live in PSRAM */
 +}
 diff --git a/esp32/components/muse/muse_wg.h b/esp32/components/muse/muse_wg.h
 new file mode 100644
-index 0000000..c4b770d
+index 0000000..4133cfe
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,56 @@
 +/*
 + * Local addition: a WireGuard tunnel so Muse's server can be reached from a network that
 + * blocks it. The tunnel is brought up only when needed ("Auto": Muse does not answer a quick
@@ -25846,6 +25864,7 @@ index 0000000..c4b770d
 +    MUSE_WG_S_NO_WIFI,
 +    MUSE_WG_S_HOME,        /* on the home Wi-Fi: never needed */
 +    MUSE_WG_S_DIRECT,      /* Auto, and Muse answers directly */
++    MUSE_WG_S_NOT_NEEDED,  /* Auto, and Muse is not the one answering */
 +    MUSE_WG_S_CONNECTING,
 +    MUSE_WG_S_UP,
 +    MUSE_WG_S_FAILED,
