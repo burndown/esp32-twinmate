@@ -22,7 +22,10 @@ const SECRET_NAMES = { dashscope_key: "DASHSCOPE_API_KEY", ark_key: "ARK_API_KEY
   custom_key: "CUSTOM_LLM_KEY", volc_appid: "VOLC_APPID", volc_token: "VOLC_TOKEN",
   azure_key: "AZURE_SPEECH_KEY", homebox_token: "HOMEBOX_ASR_TOKEN" };
 
+let AI = null;   // the Workers AI binding of this request, when the Worker has one ([ai] binding = "AI" in wrangler.toml)
+
 async function loadAll(env) {
+  AI = env.AI || null;
   let over = null, sec = null;
   try { over = env.CFG ? await env.CFG.get("config", "json") : null; } catch (e) { /* defaults */ }
   try { sec = env.CFG ? await env.CFG.get("secrets", "json") : null; } catch (e) { /* env only */ }
@@ -70,6 +73,15 @@ async function recognise(cfg, S, audio, mime) {
     if (!r.ok) throw new Error("homebox asr http " + r.status);
     const d = await r.json();
     return (d.text || "").trim();
+  }
+  if (A.provider === "cloudflare") {
+    // Workers AI, free allowance 10,000 neurons a day (about 200 audio minutes for this model). No key: it is a binding.
+    if (!AI) throw new Error("Workers AI binding missing: add [ai] binding = \"AI\" to wrangler.toml and deploy to Cloudflare");
+    if (mime !== "audio/wav") throw new Error("Workers AI ASR takes WAV only");
+    const args = { audio: b64(audio) };
+    if (A.language !== "auto") args.language = A.language || "zh";
+    const r = await AI.run("@cf/openai/whisper-large-v3-turbo", args);
+    return (r.text || "").trim();
   }
   if (A.provider === "azure") {
     // Azure Speech short-audio REST API: the same resource, key and region as Azure text-to-speech (60 s of audio at most).
@@ -580,9 +592,9 @@ async function admin(req, env, url, all) {
         const { audio, parts } = await synthAll(all.cfg, all.S, "你好，我是圆圆。这是一段语音合成的测试，如果你能听到我说话，说明这项服务已经配置好了。");
         return new Response(audio, { headers: { "content-type": "audio/mpeg", "x-ms": String(Date.now() - t0), "x-parts": String(parts) } });
       }
-      if (service === "asr" && (all.cfg.asr.provider === "homebox" || all.cfg.asr.provider === "azure")) {
+      if (service === "asr" && (["homebox", "azure", "cloudflare"].includes(all.cfg.asr.provider))) {
         const text0 = await recognise(all.cfg, all.S, wav(new Uint8Array(32000), 16000), "audio/wav");   // 1 s of silence
-        return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和密钥正常。这里发的是 1 秒静音：SenseVoice 对纯静音会乱猜一个字，Azure 会返回空；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
+        return json({ ok: true, ms: Date.now() - t0, text: text0 || "(空)", note: "连通和密钥正常。这里发的是 1 秒静音：SenseVoice 对纯静音会乱猜一个字，Azure 会返回空，Whisper 可能给出一两个字；云端没法把 MP3 转成录音来测识别效果，真实效果以说话为准" });
       }
       if (service === "asr") {
         const { audio } = await synthAll(all.cfg, all.S, "今天天气怎么样，需要带伞吗");

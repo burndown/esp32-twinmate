@@ -30,7 +30,7 @@ flowchart LR
 | | 阿里云百炼 | 火山引擎 | 微软 | 其他 |
 |---|---|---|---|---|
 | 大模型 | 通义千问，支持联网搜索（`enable_search`） | 方舟豆包，联网搜索走 Responses API 的 `web_search` 工具 | | DeepSeek；任意 OpenAI 兼容服务（含家里的 Ollama） |
-| 语音识别 | Qwen3-ASR-Flash | 豆包录音文件识别极速版 | **Azure Speech**（短音频 REST，与语音合成同一把密钥和区域） | **本地服务器**（SenseVoice 经 sherpa-onnx，WAV 进、`{"text"}` 出） |
+| 语音识别 | Qwen3-ASR-Flash | 豆包录音文件识别极速版 | **Azure Speech**（短音频 REST，与语音合成同一把密钥和区域）；**Cloudflare Workers AI**（Whisper large-v3-turbo，免费、不需要密钥，只能在部署到 Cloudflare 的网关上用） | **本地服务器**（SenseVoice 经 sherpa-onnx，WAV 进、`{"text"}` 出） |
 | 语音合成 | CosyVoice（WebSocket，输出 16 kHz MP3） | 豆包语音合成（HTTP v1） | **Azure Speech**（Neural 音色，REST，16 kHz MP3） | |
 
 **用 CLIProxyAPI 接入 ChatGPT / Gemini 订阅（仅限家里网关，我自己实测过一次）**：[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 在内网提供 OpenAI 兼容接口，云端 Worker 够不到它，所以只能配在家里网关上。两种用法：
@@ -48,9 +48,9 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 
 ## 纯云端部署（不需要家里的电脑）
 
-只需要：圆圆（或别的支持的板子）、一个 Muse 账号、一个免费的 Cloudflare 账号、一个 **Azure Speech** 资源。识别和合成用同一把 Azure 密钥，回答者只有 **Muse** 和 **Grok Bot（Webhook 机器人）** 两个，不需要大模型。
+只需要：圆圆（或别的支持的板子）、一个 Muse 账号、一个免费的 Cloudflare 账号、一个 **Azure Speech** 资源。合成用 Azure；识别可以用 Azure（同一把密钥），也可以用 **Cloudflare Workers AI 的 Whisper**（免费、不需要密钥）。回答者只有 **Muse** 和 **Grok Bot（Webhook 机器人）** 两个，不需要大模型。
 
-1. 部署 `worker/`（见下面"部署网关"），在设置页的"密钥"里填 Azure Speech 密钥；语音识别和语音合成的服务商都选 **微软 Azure**，区域选离你近的（亚洲可用 `eastasia`）。
+1. 部署 `worker/`（见下面"部署网关"），在设置页的"密钥"里填 Azure Speech 密钥；语音合成选 **微软 Azure**，区域选离你近的（亚洲可用 `eastasia`）；语音识别选 **Cloudflare Workers AI**（免费，不用密钥）或 **微软 Azure**。
 2. 固件的 Kconfig 里关掉模型：`CONFIG_MUSE_MODEL_ANSWERS=n`（`firmware/sdkconfig.cloud.example` 里有）。这样设置 → Answers 只有 Muse 和 Grok Bot 两项；选 Muse 时录音识别后文字**直接发给 Muse**，不经过网关的 `/chat`；Muse 连不上或 Bot 没响应时，圆屏显示错误（`CAN'T REACH MUSE`、`GROK BOT DIDN'T ANSWER`），**不会**换别的回答者接手。
 3. `MUSE_HOME_SSID` 留空，三个地址都填 Worker 的地址（`https://你的worker.workers.dev/stt?k=令牌` 等）。
 4. Grok Bot 的回调直接打到 Worker 的 `/bot-reply`（Worker 本来就有公网 HTTPS 地址，不需要中转站点）。在 Bot 的"允许访问的外部地址"里加入你的 `*.workers.dev` 域名。
@@ -59,6 +59,8 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 - Azure Speech 免费档（F0）按[官方定价页](https://azure.microsoft.com/pricing/details/cognitive-services/speech-services)：语音识别每月 5 小时音频，神经语音合成每月 50 万字符，同时只能有 1 个实时请求。按一次问答录音约 5 秒、回答约 600 字估算，约合每月 3600 次提问或约 800 次长回答，**这是估算，不是实测**。
 - Cloudflare Workers 免费版按[官方限制页](https://developers.cloudflare.com/workers/platform/limits/)：每天 10 万次请求，每次请求 10 毫秒 CPU 时间（等待网络不算），每次请求最多 50 个子请求。KV 每天约 1000 次写入的数字我只在第三方文章里见过，请以官方为准。一轮问答约 1 次识别加十几次语音请求，每天几千轮也用不完请求数。
 - **没验证的风险**：每次请求 10 毫秒 CPU 够不够拼接多段 MP3 和做流式转换，我还没在真正的 Cloudflare 上量过；Grok Bot 的回调状态放在 KV 里，KV 最终一致，回调可能晚一点被等待的请求看见。
+
+**Cloudflare Workers AI 的识别**：用 `@cf/openai/whisper-large-v3-turbo`，按[官方定价](https://developers.cloudflare.com/workers-ai/platform/pricing/)每音频分钟 46.63 个 Neurons，免费每天 10,000 个，约 200 分钟。用同一段中文录音经真实的 Worker 测过：识别正确（简体），稳定后约 1.2 秒，冷启动那一次 5.2 秒。**不要选 `@cf/openai/whisper`（不是 turbo 版）**，同一段话它输出繁体还错了一个字。语音合成不建议用 Workers AI 的 MeloTTS：它输出 44.1 kHz 的 WAV，而固件只解 MP3，Worker 免费版的 10 毫秒 CPU 又编不了 MP3，需要固件另加 WAV 播放，目前没做。
 
 **验证状态（如实说明）**：Azure 识别经网关用一段中文录音测过，识别正确，网关本地响应 1.2 到 2.8 秒（含从 Mac 到 Azure 东亚区域的往返）。**纯云端的完整一轮（圆圆 → Cloudflare 上的 Worker → Azure）我还没有在真机上跑过。**
 
