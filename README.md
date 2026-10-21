@@ -13,22 +13,38 @@ This is a personal project and has not been reviewed by Meta. Muse requires your
 
 ## How it works
 
-The device sends recordings to the gateway for recognition, then sends the text to the selected answer source. With Muse selected, the text goes directly to Muse. With the Webhook bot selected, the gateway forwards the request and waits for a callback. Replies are synthesised through the gateway and played on the device.
+Every question is first turned into text: the device sends the recording to the gateway, which recognises it and returns the text. The device then sends that text to the answer source chosen in **Answers**. With Muse selected, the device sends the text to Muse directly. With the Webhook bot selected, the text goes through the gateway to the bot, which sends its answer back to the gateway by callback. The reply text is then turned into speech by the gateway, one sentence at a time, and played on the device.
 
 ```mermaid
-flowchart LR
-  board["ESP32-S3 device"]
-  gw["Your Cloudflare Worker<br/>Recognition, synthesis and bot forwarding"]
-  asr["Cloudflare Whisper / Azure Speech<br/>Speech recognition"]
-  tts["Azure Speech<br/>Speech synthesis"]
-  bot["Custom Webhook bot<br/>Menu name: Grok Bot"]
-  muse["Muse cloud"]
-  board -->|Recording or text to synthesise| gw
-  gw --> asr
-  gw --> tts
-  gw -->|When Grok Bot is selected| bot
-  bot -->|Reply callback| gw
-  board -->|When Muse is selected: send text directly| muse
+sequenceDiagram
+  participant D as Device
+  participant G as Your Cloudflare Worker
+  participant A as Recognition<br/>(Cloudflare Whisper / Azure Speech)
+  participant S as Synthesis<br/>(Azure Speech)
+  participant M as Muse cloud
+  participant B as Webhook bot<br/>(menu name: Grok Bot)
+  Note over D,G: 1. Every question is turned into text first
+  D->>G: recording
+  G->>A: audio
+  A-->>G: text
+  G-->>D: recognised text
+  Note over D,B: 2. The text goes to the answer source chosen in Answers
+  alt Muse selected
+    D->>M: text (direct, not through the gateway)
+    M-->>D: reply text
+  else Grok Bot selected
+    D->>G: text
+    G->>B: Webhook with the text
+    B-->>G: answer (callback)
+    G-->>D: reply text
+  end
+  Note over D,S: 3. The reply text is turned into speech and played
+  loop each sentence of the reply
+    D->>G: reply text
+    G->>S: text
+    S-->>G: MP3
+    G-->>D: MP3
+  end
 ```
 
 WireGuard is an optional network path. It does not change the answer source or processing flow above.

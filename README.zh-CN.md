@@ -13,22 +13,38 @@
 
 ## 工作方式
 
-设备将录音交给网关识别，再把文字发送给选定的回答来源。选择 Muse 时，文字直接发送到 Muse；选择 Webhook 机器人时，由网关转交并等待回调。回复通过网关合成为语音，在设备上播放。
+每一句话都先转成文字：设备把录音交给网关识别，网关把文字返回给设备。设备再把这段文字交给 **Answers** 里选定的回答来源：选 Muse 时，设备直接把文字发给 Muse；选 Webhook 机器人时，文字经网关转给机器人，机器人通过回调把答案送回网关。回复文字再由网关一句一句合成语音，在设备上播放。
 
 ```mermaid
-flowchart LR
-  board["ESP32-S3 设备"]
-  gw["你的 Cloudflare Worker<br/>语音识别、语音合成、机器人转发"]
-  asr["Cloudflare Whisper / Azure Speech<br/>语音识别"]
-  tts["Azure Speech<br/>语音合成"]
-  bot["自定义 Webhook 机器人<br/>菜单名称：Grok Bot"]
-  muse["Muse 云端"]
-  board -->|录音、待合成的文字| gw
-  gw --> asr
-  gw --> tts
-  gw -->|选择 Grok Bot 时| bot
-  bot -->|回复回调| gw
-  board -->|选择 Muse 时，直接发送文字| muse
+sequenceDiagram
+  participant D as 设备
+  participant G as 你的 Cloudflare Worker
+  participant A as 语音识别<br/>(Cloudflare Whisper / Azure Speech)
+  participant S as 语音合成<br/>(Azure Speech)
+  participant M as Muse 云端
+  participant B as Webhook 机器人<br/>(菜单名称：Grok Bot)
+  Note over D,G: 1. 每一句话都先转成文字
+  D->>G: 录音
+  G->>A: 音频
+  A-->>G: 文字
+  G-->>D: 识别出的文字
+  Note over D,B: 2. 文字交给 Answers 里选的回答来源
+  alt 选了 Muse
+    D->>M: 文字（设备直接发给 Muse，不经过网关）
+    M-->>D: 回复文字
+  else 选了 Grok Bot
+    D->>G: 文字
+    G->>B: 带着文字的 Webhook
+    B-->>G: 答案（回调）
+    G-->>D: 回复文字
+  end
+  Note over D,S: 3. 回复文字合成语音并播放
+  loop 回复的每一句
+    D->>G: 回复文字
+    G->>S: 文字
+    S-->>G: MP3
+    G-->>D: MP3
+  end
 ```
 
 WireGuard 是可选的网络通路，不改变上述回答来源或处理流程。
