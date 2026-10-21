@@ -1,0 +1,28 @@
+# Overlay for the cloud-only build: the gateway is a Cloudflare Worker (worker/), WireGuard reaches Muse and Cloudflare from a
+# network that blocks them. Copy this file to one you do NOT commit (it holds your gateway token), fill in the five places marked
+# with YOUR_, and add it LAST to SDKCONFIG_DEFAULTS (see the README, "Cloud-only deployment").
+
+# ---- the gateway: three addresses on the same Worker, with the gateway token (the one you open /admin?k=... with) ----
+CONFIG_MUSE_STT_URL="https://YOUR_WORKER.workers.dev/stt?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_TTS_URL="https://YOUR_WORKER.workers.dev/tts?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_BRAIN_URL="https://YOUR_WORKER.workers.dev/chat?k=YOUR_GATEWAY_TOKEN"
+CONFIG_MUSE_STT_FALLBACK_URL=""
+CONFIG_MUSE_TTS_FALLBACK_URL=""
+CONFIG_MUSE_BRAIN_FALLBACK_URL=""
+CONFIG_MUSE_HOME_SSID=""
+
+# Cloudflare serves a cross-signed Google Trust Services chain; without this the TLS handshake fails (-0x3000).
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+
+# ---- no language model: Settings > Answers offers Muse and the Grok Bot; a failure is shown as an error ----
+# CONFIG_MUSE_MODEL_ANSWERS is not set
+
+# ---- WireGuard: the gateway's requests go through the tunnel as well, and Auto starts it when Muse or the gateway is unreachable ----
+CONFIG_ESP_NETIF_BRIDGE_EN=y
+CONFIG_MUSE_GATEWAY_VIA_TUNNEL=y
+CONFIG_MUSE_WG_ENDPOINT="YOUR_WG_SERVER_HOST_OR_IP"
+CONFIG_MUSE_WG_PORT=51820
+CONFIG_MUSE_WG_SERVER_KEY="YOUR_WG_SERVER_PUBLIC_KEY"
+CONFIG_MUSE_WG_ADDRESS="10.77.0.2"
+# The device makes its own key pair at the first start. Add its public key on the server (the boot log prints it, Settings >
+# WireGuard shows it): sudo wg set wg0 peer '<public key>' allowed-ips 10.77.0.2/32

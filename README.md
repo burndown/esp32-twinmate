@@ -56,7 +56,7 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 只需要：圆圆（或别的支持的板子）、一个 Muse 账号、一个免费的 Cloudflare 账号、一个 **Azure Speech** 资源。合成用 Azure；识别可以用 Azure（同一把密钥），也可以用 **Cloudflare Workers AI 的 Whisper**（免费、不需要密钥）。回答者只有 **Muse** 和 **Grok Bot（Webhook 机器人）** 两个，不需要大模型。
 
 1. 部署 `worker/`（见下面"部署网关"），在设置页的"密钥"里填 Azure Speech 密钥；语音合成选 **微软 Azure**，区域选离你近的（亚洲可用 `eastasia`）；语音识别选 **Cloudflare Workers AI**（免费，不用密钥）或 **微软 Azure**。
-2. 固件的 Kconfig 里关掉模型：`CONFIG_MUSE_MODEL_ANSWERS=n`（`firmware/sdkconfig.cloud.example` 里有）。这样设置 → Answers 只有 Muse 和 Grok Bot 两项；选 Muse 时录音识别后文字**直接发给 Muse**，不经过网关的 `/chat`；Muse 连不上或 Bot 没响应时，圆屏显示错误（`CAN'T REACH MUSE`、`GROK BOT DIDN'T ANSWER`），**不会**换别的回答者接手。
+2. 固件的配置：复制 `firmware/sdkconfig.cloud-only.example` 成一个**不提交**的文件，填上 Worker 的地址、网关令牌和 WireGuard 服务器信息（它已经包含关掉模型、网关请求走隧道、Cloudflare 证书链这几项），编译时把它放在 `SDKCONFIG_DEFAULTS` 的最后。关掉模型即 `CONFIG_MUSE_MODEL_ANSWERS=n`。这样设置 → Answers 只有 Muse 和 Grok Bot 两项；选 Muse 时录音识别后文字**直接发给 Muse**，不经过网关的 `/chat`；Muse 连不上或 Bot 没响应时，圆屏显示错误（`CAN'T REACH MUSE`、`GROK BOT DIDN'T ANSWER`），**不会**换别的回答者接手。
 3. `MUSE_HOME_SSID` 留空，三个地址都填 Worker 的地址（`https://你的worker.workers.dev/stt?k=令牌` 等）。
 4. Grok Bot 的回调直接打到 Worker 的 `/bot-reply`（Worker 本来就有公网 HTTPS 地址，不需要中转站点）。在 Bot 的"允许访问的外部地址"里加入你的 `*.workers.dev` 域名。
 
