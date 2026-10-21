@@ -122,8 +122,15 @@ function fill(d) {
   $("b_do").textContent = d.binding.durable ? "Durable Object：有" : "Durable Object：没有（回调会有延迟）"; $("b_do").className = "badge" + (d.binding.durable ? " ok" : "");
   $("cbhost").textContent = new URL(c.bot.callback_base || ORIGIN).hostname;
   const peers = d.peers || [];
-  $("peers").innerHTML = peers.length ? peers.map((p) => '<div class="peer"><b>' + p.ip + "</b> · 申请于 " + new Date(p.at).toLocaleString() +
-    "<code>" + p.cmd + '</code><button onclick="copyCmd(this)">复制命令</button></div>').join("") : "还没有。";
+  $("peers").innerHTML = peers.length ? peers.map((p) => '<div class="peer"><b>' + p.ip + "</b> · " + (p.ok ? "已批准" : "待批准（一周内不批准会被忘掉）") + " · 申请于 " + new Date(p.at).toLocaleString() +
+    "<code>" + p.cmd + '</code><button onclick="copyCmd(this)">复制命令</button> ' +
+    (p.ok ? "" : '<button onclick="peerAct(\'approve\', \'' + p.pub + '\')">标记为已批准</button> ') +
+    '<button onclick="peerAct(\'revoke\', \'' + p.pub + '\')">吊销并释放地址</button></div>').join("") : "还没有。";
+}
+async function peerAct(action, pub) {
+  if (action === "revoke" && !confirm("吊销这把公钥并释放它的地址？别忘了在 WireGuard 服务器上也删掉它：sudo wg set wg0 peer '" + pub + "' remove")) return;
+  await fetch("/admin/wg?k=" + encodeURIComponent(K), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, pub }) });
+  load();
 }
 async function copyCmd(btn) {
   const t = btn.previousSibling.textContent;

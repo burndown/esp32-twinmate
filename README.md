@@ -108,6 +108,8 @@ npx wrangler deploy
 
 然后打开 `https://<你的worker>.workers.dev/admin?k=<令牌>`，一个页面里设置全部：
 - **这个网关**：固件里要填的三个地址，以及 Workers AI 和 Durable Object 两个绑定是否在。
+
+**网关的防护（`worker/`，精简版）**：请求大小有上限（`/stt` 2 MB、`/tts` 600 字、`/chat` 1000 字、头像 120 KB，超过返回 413）；Azure 区域只接受 `eastasia` 这样的名字，Bot 的 Webhook 和回调地址只接受公网域名上的 https；Bot 回调的 id 带签名，伪造的请求在碰到存储之前就被拒绝；令牌比较是常量时间的。WireGuard 登记放在一个 Durable Object 里（`wrangler.toml` 里的 `WG` 绑定和 `v2` 迁移，`wrangler deploy` 会一并创建）：并发登记不会拿到同一个地址，最多 20 个公钥同时等待批准，一周内没批准的会被忘掉，设置页里可以"标记为已批准"或"吊销并释放地址"。**要送给别人，令牌必须是长随机串**（`openssl rand -base64 24`），目前设备令牌和管理令牌是同一个，见 `docs/` 外的设计评审。
 - **语音识别**：Cloudflare Workers AI（Whisper，免费）或 Azure Speech，和语言。
 - **语音合成**：Azure 的区域、音色（可以拉取完整音色列表）和 Azure Speech 密钥。
 - **Grok Bot**：Webhook 地址和授权（存成密钥，页面只显示末四位）、可选的回调域名，以及“测试 Grok Bot”按钮（会真的问它一句）。机器人的“允许访问的外部地址”里要加上页面里显示的这个网关的域名。
