@@ -19,3 +19,13 @@ CONFIG_ESP_NETIF_BRIDGE_EN=y
 #
 # Cloud-only profile (no language model on the gateway): only Muse and the Grok Bot answer, failures are shown as errors.
 #CONFIG_MUSE_MODEL_ANSWERS=n
+#
+# WireGuard for a gateway on Cloudflare (a network may block or slow Cloudflare and Muse): the gateway's requests go through
+# the tunnel as well, and Auto starts the tunnel when Muse or the gateway is not reachable directly.
+#CONFIG_MUSE_GATEWAY_VIA_TUNNEL=y
+# The tunnel server can be set here instead of being handed out by the gateway. The device still makes its own key pair:
+# Settings > WireGuard shows the public key (the boot log prints it too); add it on the server as a peer with this address.
+#CONFIG_MUSE_WG_ENDPOINT="your.server.example"
+#CONFIG_MUSE_WG_PORT=51820
+#CONFIG_MUSE_WG_SERVER_KEY="the server's public key"
+#CONFIG_MUSE_WG_ADDRESS="10.77.0.2"

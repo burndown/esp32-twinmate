@@ -28,3 +28,7 @@ sudo systemctl enable --now wg-quick@wg0     # 要开 net.ipv4.ip_forward=1
 批准一台设备：设备申请后，访问网关 `GET /wg/peers?k=令牌`，把里面的 `sudo wg set wg0 peer '…' allowed-ips 10.77.0.N/32` 在服务器上执行；要让它重启后还在，把 `[Peer]` 段（`sudo wg showconf wg0`）追加进 `wg0.conf`。
 
 注意：设备的 UDP 包只用 Wi-Fi 网卡发，所以服务器的 `ListenPort` 要对外开放；一台服务器不能同时是家里网络的路由器，因为设备走隧道时所有新连接都从服务器出去。
+
+## 不经过网关配置设备
+
+在固件的 Kconfig 里设置 `MUSE_WG_ENDPOINT`、`MUSE_WG_PORT`、`MUSE_WG_SERVER_KEY`（`server.pub` 的内容）和 `MUSE_WG_ADDRESS`（这台设备在隧道里的地址，例如 `10.77.0.2`）。刷机后设备会生成自己的密钥对，在设置 → WireGuard 页和开机日志里能看到公钥，然后在服务器上执行 `sudo wg set wg0 peer '<公钥>' allowed-ips 10.77.0.2/32`。网关不需要 `WG_SERVER_PUB` 和 `WG_ENDPOINT`。

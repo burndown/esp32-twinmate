@@ -44,10 +44,10 @@ index 73c8ffa..b80c40f 100644
      # which its Kconfig can't do. Abort, so the panic handler prints a backtrace
      # and reboots. PUBLIC reaches LVGL and every file that includes lvgl.h.
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 1f65257..e96ae38 100644
+index 1f65257..2cc40f5 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -111,6 +111,92 @@ menu "Muse"
+@@ -111,6 +111,124 @@ menu "Muse"
              depends on IDF_TARGET_ESP32C3
      endchoice
  
@@ -70,6 +70,38 @@ index 1f65257..e96ae38 100644
 +            Muse then never receives your voice, only the text.
 +
 +    # Local addition: public backups for the brain and the speech server, for when the home LAN is out of reach.
++    # Local addition: WireGuard (components/muse/muse_wg.c).
++    config MUSE_GATEWAY_VIA_TUNNEL
++        bool "Send requests to the gateway through the WireGuard tunnel as well"
++        default n
++        help
++            Off (the default, for a gateway at home): recognition, chat and speech requests are bound to the Wi-Fi
++            interface and never use the tunnel; only the connection to Muse does.
++            On (for a gateway on Cloudflare, which a network may block or slow down): the gateway's requests go
++            through the tunnel too, and the tunnel's Auto mode also starts when the gateway is not reachable
++            directly.
++
++    config MUSE_WG_ENDPOINT
++        string "WireGuard server address (host or IP; empty: the gateway hands it out at set-up)"
++        default ""
++        help
++            Set this, MUSE_WG_SERVER_KEY and MUSE_WG_ADDRESS to configure the tunnel without the gateway. The device
++            still makes its own key pair: Settings > WireGuard shows its public key, which you add to the server as a
++            peer with MUSE_WG_ADDRESS as its allowed address.
++
++    config MUSE_WG_PORT
++        int "WireGuard server UDP port"
++        range 1 65535
++        default 51820
++
++    config MUSE_WG_SERVER_KEY
++        string "WireGuard server public key (base64)"
++        default ""
++
++    config MUSE_WG_ADDRESS
++        string "This device's address inside the tunnel, e.g. 10.77.0.2"
++        default ""
++
 +    config MUSE_HOME_SSID
 +        string "Home Wi-Fi network name (empty: probe the LAN address instead)"
 +        default ""
@@ -24281,7 +24313,7 @@ index 705a5cb..972ca0d 100644
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..ce8dc31 100644
+index 6a372ac..8801e40 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
 @@ -31,12 +31,14 @@
@@ -24348,7 +24380,7 @@ index 6a372ac..ce8dc31 100644
      s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
-@@ -1144,6 +1154,162 @@ static void tick_sleep(void)
+@@ -1144,6 +1154,167 @@ static void tick_sleep(void)
      }
  }
  
@@ -24444,7 +24476,7 @@ index 6a372ac..ce8dc31 100644
 +
 +/* ---------- WireGuard ---------- */
 +
-+static lv_obj_t *s_wg_checks[3], *s_wg_state, *s_wg_addr, *s_wg_key, *s_wg_setup_lbl, *s_wg_note;
++static lv_obj_t *s_wg_checks[3], *s_wg_state, *s_wg_server, *s_wg_addr, *s_wg_key, *s_wg_setup_lbl, *s_wg_note, *s_wg_fullkey;
 +
 +static void on_wg_mode(lv_event_t *e)
 +{
@@ -24474,11 +24506,13 @@ index 6a372ac..ce8dc31 100644
 +        lv_obj_set_style_text_color(s_wg_checks[i], lv_color_hex(COLOR_ACCENT), 0);
 +    }
 +    s_wg_state = info_row(list, "Status");
++    s_wg_server = info_row(list, "Server");
 +    s_wg_addr = info_row(list, "Tunnel address");
 +    s_wg_key = info_row(list, "Device key");
 +    button(list, LV_SYMBOL_DOWNLOAD "  Get config", COLOR_ACCENT, on_wg_setup, &s_wg_setup_lbl);
 +    button(list, LV_SYMBOL_TRASH "  Forget", COLOR_DANGER, on_wg_forget, NULL);
 +    s_wg_note = note(list, "");
++    s_wg_fullkey = note(list, "");   /* the whole public key, to add on the server */
 +}
 +
 +static void tick_wg(void)
@@ -24489,9 +24523,12 @@ index 6a372ac..ce8dc31 100644
 +    }
 +    char buf[96];
 +    set_text(s_wg_state, muse_wg_enrolling() ? "Getting config..." : muse_wg_state_name(muse_wg_state()));
++    muse_wg_endpoint(buf);
++    set_text(s_wg_server, buf[0] ? buf : "-");
 +    muse_wg_address(buf);
 +    set_text(s_wg_addr, buf[0] ? buf : "-");
 +    muse_wg_public_key(buf);
++    set_text(s_wg_fullkey, buf);
 +    if (buf[0]) {
 +        buf[10] = '\0';
 +        strlcat(buf, "...", sizeof(buf));
@@ -24511,7 +24548,7 @@ index 6a372ac..ce8dc31 100644
  /* ---------- Battery ---------- */
  
  static void on_battery_reset(lv_event_t *e)
-@@ -1287,6 +1453,9 @@ static const page_t BLE = { &s_ble, build_ble_page };
+@@ -1287,6 +1458,9 @@ static const page_t BLE = { &s_ble, build_ble_page };
  static const page_t SOUND = { &s_sound, build_sound_page };
  static const page_t SLEEP = { &s_sleep, build_sleep_page };
  static const page_t BATTERY = { &s_battery, build_battery_page };
@@ -24521,7 +24558,7 @@ index 6a372ac..ce8dc31 100644
  static const page_t POWER = { &s_power, build_power_page };
  
  static void build_home(lv_obj_t *tile)
-@@ -1297,6 +1466,9 @@ static void build_home(lv_obj_t *tile)
+@@ -1297,6 +1471,9 @@ static void build_home(lv_obj_t *tile)
      row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
      row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
      row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
@@ -24531,7 +24568,7 @@ index 6a372ac..ce8dc31 100644
      row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
      row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
      if (muse_board->power_off) {
-@@ -1325,6 +1497,9 @@ static void tick_home(void)
+@@ -1325,6 +1502,9 @@ static void tick_home(void)
      } else {
          set_text(s_home_sound, "Muted");
      }
@@ -24541,7 +24578,7 @@ index 6a372ac..ce8dc31 100644
      set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
  
      muse_power_t p = muse_state_power();
-@@ -1376,6 +1551,12 @@ void muse_settings_ui_tick(bool visible)
+@@ -1376,6 +1556,12 @@ void muse_settings_ui_tick(bool visible)
          tick_sound();
      } else if (s_current == s_sleep) {
          tick_sleep();
@@ -25248,10 +25285,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..9f4525f
+index 0000000..db89bb4
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,612 @@
+@@ -0,0 +1,697 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25300,6 +25337,17 @@ index 0000000..9f4525f
 +#ifndef CONFIG_MUSE_HOME_SSID
 +#define CONFIG_MUSE_HOME_SSID ""
 +#endif
++#ifndef CONFIG_MUSE_WG_ENDPOINT
++#define CONFIG_MUSE_WG_ENDPOINT ""
++#define CONFIG_MUSE_WG_PORT 51820
++#define CONFIG_MUSE_WG_SERVER_KEY ""
++#define CONFIG_MUSE_WG_ADDRESS ""
++#endif
++#ifdef CONFIG_MUSE_GATEWAY_VIA_TUNNEL
++#define GATEWAY_VIA_TUNNEL 1
++#else
++#define GATEWAY_VIA_TUNNEL 0
++#endif
 +#ifndef CONFIG_MUSE_BRAIN_URL
 +#define CONFIG_MUSE_BRAIN_URL ""
 +#endif
@@ -25323,9 +25371,13 @@ index 0000000..9f4525f
 +static bool s_ctx_ready, s_up;
 +static nvs_handle_t s_nvs;
 +static bool s_nvs_ok;
++static bool s_static;   /* the server details come from the build, not from the gateway */
 +
 +const struct ifreq *muse_wg_sta_if(void)
 +{
++    if (GATEWAY_VIA_TUNNEL) {
++        return NULL;   /* the gateway is reached through the tunnel when there is one */
++    }
 +    static struct ifreq r;
 +    if (!r.ifr_name[0]) {
 +        esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
@@ -25341,6 +25393,8 @@ index 0000000..9f4525f
 +static void set_err(const char *e) { strlcpy(s_err, e ? e : "", sizeof(s_err)); }
 +
 +/* ---------- storage ---------- */
++
++static void make_keys(void);
 +
 +static void load(void)
 +{
@@ -25364,7 +25418,21 @@ index 0000000..9f4525f
 +    }
 +    nvs_get_u16(s_nvs, "port", &s_port);
 +    nvs_get_u16(s_nvs, "keep", &s_keep);
++    if (CONFIG_MUSE_WG_ENDPOINT[0] && CONFIG_MUSE_WG_SERVER_KEY[0] && CONFIG_MUSE_WG_ADDRESS[0]) {
++        /* Configured in the build: the gateway is not asked for the peer details. */
++        strlcpy(s_srv, CONFIG_MUSE_WG_SERVER_KEY, sizeof(s_srv));
++        strlcpy(s_ep, CONFIG_MUSE_WG_ENDPOINT, sizeof(s_ep));
++        strlcpy(s_addr, CONFIG_MUSE_WG_ADDRESS, sizeof(s_addr));
++        s_port = CONFIG_MUSE_WG_PORT;
++        s_static = true;
++        if (!s_priv[0]) {
++            make_keys();
++        }
++    }
 +    s_configured = s_priv[0] && s_srv[0] && s_ep[0] && s_addr[0];
++    if (s_pub[0]) {
++        ESP_LOGI(TAG, "device public key: %s", s_pub);
++    }
 +}
 +
 +static void save_str(const char *k, const char *v)
@@ -25398,6 +25466,7 @@ index 0000000..9f4525f
 +const char *muse_wg_last_error(void) { return s_err; }
 +void muse_wg_public_key(char out[48]) { strlcpy(out, s_pub, 48); }
 +void muse_wg_address(char out[20]) { strlcpy(out, s_addr, 20); }
++void muse_wg_endpoint(char out[64]) { strlcpy(out, s_ep, 64); }
 +
 +const char *muse_wg_state_name(muse_wg_state_t s)
 +{
@@ -25470,16 +25539,14 @@ index 0000000..9f4525f
 +    }
 +}
 +
-+/* A quick TCP connect to Muse's server decides whether the tunnel is needed. */
-+static bool muse_reachable(void)
++/* A quick TCP connect decides whether the tunnel is needed. */
++static bool tcp_reachable(const char *host, const char *port)
 +{
-+    char host[MUSE_HOST_MAX + 1];
-+    muse_settings_hatch_host(host);
 +    if (!host[0]) {
 +        return true;
 +    }
 +    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
-+    int gai = getaddrinfo(host, "443", &hints, &res);
++    int gai = getaddrinfo(host, port, &hints, &res);
 +    if (gai != 0 || !res) {
 +        ESP_LOGW(TAG, "probe: lookup of %s failed (%d)", host, gai);
 +        return false;
@@ -25511,6 +25578,55 @@ index 0000000..9f4525f
 +    }
 +    freeaddrinfo(res);
 +    return ok;
++}
++
++static bool muse_reachable(void)
++{
++    char host[MUSE_HOST_MAX + 1];
++    muse_settings_hatch_host(host);
++    return tcp_reachable(host, "443");
++}
++
++/* The gateway's host and port, out of the chat URL. False when there is none. */
++static bool gateway_host(char *host, size_t hcap, char *port, size_t pcap)
++{
++    const char *u = CONFIG_MUSE_BRAIN_URL, *p = strstr(u, "://");
++    if (!p) {
++        return false;
++    }
++    bool tls = strncmp(u, "https", 5) == 0;
++    p += 3;
++    size_t n = strcspn(p, "/:?");
++    if (!n || n >= hcap) {
++        return false;
++    }
++    memcpy(host, p, n);
++    host[n] = 0;
++    strlcpy(port, p[n] == ':' ? p + n + 1 : (tls ? "443" : "80"), pcap);
++    port[strcspn(port, "/?")] = 0;
++    return true;
++}
++
++/* Everything that has to be reachable through the real network, and is not: true when the tunnel is needed. */
++static bool tunnel_needed(void)
++{
++    bool need_muse = muse_settings_away_mode() == 0;
++    char gh[96] = "", gp[8] = "";
++    bool need_gw = GATEWAY_VIA_TUNNEL && gateway_host(gh, sizeof(gh), gp, sizeof(gp));
++    if (need_muse && !muse_reachable()) {
++        ESP_LOGI(TAG, "Muse not reachable directly");
++        return true;
++    }
++    if (need_gw && !tcp_reachable(gh, gp)) {
++        ESP_LOGI(TAG, "the gateway (%s) is not reachable directly", gh);
++        return true;
++    }
++    return false;
++}
++
++static bool nothing_needs_it(void)
++{
++    return muse_settings_away_mode() != 0 && !GATEWAY_VIA_TUNNEL;   /* the Grok Bot and the model go through the gateway, which does not use the tunnel */
 +}
 +
 +static bool clock_ok(void)
@@ -25626,6 +25742,12 @@ index 0000000..9f4525f
 +    set_err("");
 +    if (!s_pub[0]) {
 +        make_keys();
++    }
++    if (s_static) {   /* nothing to ask: the server details are in the build; the key pair is what was missing */
++        s_configured = true;
++        ESP_LOGI(TAG, "configured in the build; device public key: %s", s_pub);
++        s_enrolling = false;
++        return;
 +    }
 +    char a[320], b[320];
 +    bool ha = url_for(CONFIG_MUSE_BRAIN_URL, a, sizeof(a)), hb = url_for(CONFIG_MUSE_BRAIN_FALLBACK_URL, b, sizeof(b));
@@ -25823,7 +25945,7 @@ index 0000000..9f4525f
 +            s_state = MUSE_WG_S_HOME;
 +            continue;
 +        }
-+        if (s_mode == MUSE_WG_AUTO && muse_settings_away_mode() != 0) {   /* the Grok Bot and Gemini go through the home server */
++        if (s_mode == MUSE_WG_AUTO && nothing_needs_it()) {
 +            tear_down();
 +            s_state = MUSE_WG_S_NOT_NEEDED;
 +            continue;
@@ -25844,11 +25966,11 @@ index 0000000..9f4525f
 +                continue;
 +            }
 +            last_probe = now;
-+            if (muse_reachable()) {
++            if (!tunnel_needed()) {
 +                s_state = MUSE_WG_S_DIRECT;
 +                continue;
 +            }
-+            ESP_LOGI(TAG, "Muse not reachable directly: starting the tunnel");
++            ESP_LOGI(TAG, "starting the tunnel");
 +        }
 +        if (!bring_up()) {
 +            ESP_LOGW(TAG, "tunnel failed: %s", s_err);
@@ -25866,10 +25988,10 @@ index 0000000..9f4525f
 +}
 diff --git a/esp32/components/muse/muse_wg.h b/esp32/components/muse/muse_wg.h
 new file mode 100644
-index 0000000..4133cfe
+index 0000000..21bf1d4
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,57 @@
 +/*
 + * Local addition: a WireGuard tunnel so Muse's server can be reached from a network that
 + * blocks it. The tunnel is brought up only when needed ("Auto": Muse does not answer a quick
@@ -25914,6 +26036,7 @@ index 0000000..4133cfe
 +bool muse_wg_configured(void);                   /* key pair and peer details present */
 +void muse_wg_public_key(char out[48]);           /* base64, empty before the first set-up */
 +void muse_wg_address(char out[20]);              /* the tunnel address, empty before set-up */
++void muse_wg_endpoint(char out[64]);             /* the server address, empty before set-up */
 +void muse_wg_enroll(void);                       /* make a key pair if missing, ask the gateway for the peer details */
 +bool muse_wg_enrolling(void);
 +const char *muse_wg_last_error(void);            /* short text of the last set-up or connect failure, or "" */
