@@ -107,6 +107,7 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # 串口名
 
 - **设备不停重启**：看串口日志（115200）。如果你自己改过编译设置，先确认没有关掉 `ESP_NETIF_BRIDGE_EN`（固件现在会强制打开它）。把 `build/` 目录删掉重新跑 `firmware` 是安全的。
 - **刷机后设备要重新配对**：偶尔会发生，尤其是前一个固件反复重启过。在 Muse App 里重新配对即可，不用重新编译。
+- **不要用旧的闪存备份恢复配对**：重新配对会让 Muse 账号作废旧的令牌。如果你擦除前备份了 NVS 分区，在新配对之后再把它写回去，设备会带着旧令牌被 Muse 拒绝（日志里是 `HTTP 401`），固件会清除配对，要再配一次。备份只对 Wi-Fi 和菜单设置有用，对配对没用。
 - **`firmware` 报 SDK token 无效**：token 是 48 个字符，`mgst_` 加 43 个，最后一个字符有限制；从 [gadgets.muse.ai](https://gadgets.muse.ai) 重新复制。
 - **`gateway` 报 Cloudflare 的 1010 或连不上**：从有些网络直接访问 `workers.dev` 会时好时坏，重新运行即可（脚本是可重复运行的）。
 - **Grok Bot 一直说“没有回话”**：机器人的“允许访问的外部地址”里没有你的 `*.workers.dev` 域名。
@@ -138,7 +139,7 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101    # 串口名
 | `tools/muse-cloud.py` 的 `init`、`check`、`gateway`（真实部署到 Cloudflare 免费账号）、`status`、`firmware` | 通过（测试用的 Worker 已删除） |
 | 网关、WireGuard、回答者（Muse、Grok Bot；家里版还有模型）在圆圆上的完整一轮 | 通过，细节见 [docs/GATEWAY.md](docs/GATEWAY.md) 和 [docs/FIRMWARE.md](docs/FIRMWARE.md) |
 | 用脚本的 `firmware --flash` 把纯云端固件刷到圆圆上，圆圆稳定运行，选 Muse 完整一轮（识别用 Cloudflare Whisper，合成用 Azure，都经你自己的 Worker）：1 句 11 个字的问题，Muse 的回答分 20 次取语音，念了 55 秒，整轮 135 秒，设备内部内存最低 12K | 通过（2026-10-21，`wireguard.enabled = false`）。**第一次尝试失败过**：脚本漏了 `CONFIG_ESP_NETIF_BRIDGE_EN`，设备约每 4 秒重启一次，还丢了配对，要在 Muse App 里重新配对；已修（固件自己要求这个选项），第二次通过 |
-| 对一块擦除过的全新板子做第一次完整刷机、配对 | 没有验证 |
+| 对一块**擦除过的全新板子**做第一次完整刷机、配对：整片闪存擦成全 0xFF，脚本从零取上游、打补丁、编译、刷机，圆圆进入配对状态；在 Muse App 里配对后，识别、Muse、合成一轮正常（整轮 39 秒，没有重启） | 通过（2026-10-21，同一块圆圆；板子是 Waveshare 1.75C，出厂数据分区本来是空的）。**没有在一块真正的出厂新板子上做过** |
 | 一个没有任何相关经历的人，只照这份文档从零做一遍 | **没有验证** |
 | 其它板子 | 没有适配 |
 | Windows 上的 `tools/muse-cloud.py firmware`（它通过 `bash` 调用 ESP-IDF 的 `export.sh`） | 没有验证，大概需要在 WSL 里用 |
