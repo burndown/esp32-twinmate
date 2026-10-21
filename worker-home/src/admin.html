@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Muse 网关设置</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1c1c1a;--mute:#6b6b66;--card:#fff;--line:#e4e2da;--acc:#c8341f;--ok:#1a7f4b}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--fg:#ecebe6;--mute:#94938c;--card:#1d1d1b;--line:#2d2d2a;--acc:#ff6a4d;--ok:#4cc38a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"PingFang SC","Noto Sans SC",sans-serif}
+.w{max-width:720px;margin:0 auto;padding:0 16px 120px}
+h1{font-size:1.5rem;margin:40px 0 4px}
+.sub{color:var(--mute);margin:0 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 18px 16px;margin:18px 0}
+h2{font-size:1.05rem;margin:14px 0 4px}
+label{display:block;margin:12px 0 4px;color:var(--mute);font-size:.85rem}
+input[type=text],input[type=password],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+textarea{min-height:90px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>div{flex:1;min-width:150px}
+.hint{color:var(--mute);font-size:.8rem;margin-top:4px}
+.chk{display:flex;gap:8px;align-items:center;margin-top:12px;color:var(--fg);font-size:.95rem}
+button{border:1px solid var(--line);background:var(--card);color:var(--fg);padding:7px 14px;border-radius:8px;font:inherit;cursor:pointer}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+button:disabled{opacity:.5}
+.key{display:flex;gap:8px;align-items:center}.key input{flex:1}
+.st{font-size:.8rem;color:var(--ok);margin-top:3px;min-height:1.2em}
+.res{margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--bg);border:1px dashed var(--line);font-size:.85rem;white-space:pre-wrap;display:none}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:12px 16px;display:flex;justify-content:center;gap:12px;align-items:center}
+.bar span{color:var(--mute);font-size:.85rem}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="w">
+<h1>Muse 网关设置</h1>
+<p class="sub">圆圆每次说话都会经过这里：识别 → 大模型 → 语音合成。改完点“保存”，下一句话就生效，不用重刷固件。</p>
+
+<div class="card" id="mode_card">
+<h2>回到 Muse</h2>
+<div class="chk"><input type="checkbox" id="muse_mode"><label for="muse_mode" style="margin:0;color:inherit"><b>让对话回到 Muse 云端</b>（一键开关，下一句话生效）</label></div>
+<p class="hint" style="margin-top:8px">打开后，圆圆说的话仍然在这里被识别成文字，但<b>回答交给 Muse 自己的助手</b>，不再用下面选的大模型；你选的服务商和模型都保留着，关掉开关就切回来。<br>
+做不到的部分（固件限制）：语音识别和语音播报仍然走这里选的服务商，录音不会上传给 Muse。要连识别也交给 Muse，需要更新一次固件。</p>
+</div>
+
+<div class="card">
+<h2>大模型</h2>
+<div class="row">
+ <div><label>服务商</label><select id="llm_provider">
+  <option value="dashscope">阿里云百炼（通义千问）</option>
+  <option value="ark">火山方舟（豆包）</option>
+  <option value="deepseek">DeepSeek</option>
+  <option value="responses">Responses 接口（cliproxy / OpenAI，支持联网搜索）</option>
+  <option value="custom">自定义（OpenAI 兼容）</option></select></div>
+ <div><label>模型</label><input type="text" id="llm_model" list="llm_models"><datalist id="llm_models"></datalist></div>
+</div>
+<div class="chk"><input type="checkbox" id="llm_search"><label for="llm_search" style="margin:0;color:inherit">联网搜索（阿里云百炼、火山方舟、Responses 接口支持）</label></div>
+<div id="custom_url" class="hide"><label>接口地址（到 /v1 为止）</label><input type="text" id="llm_base_url" placeholder="https://api.example.com/v1"></div>
+<label>额外参数（可选，JSON，会并进请求）</label><input type="text" id="llm_extra" placeholder='{"thinking":{"type":"disabled"}}'>
+<p style="margin:12px 0 0"><button onclick="test('llm')">测试大模型</button></p><div class="res" id="res_llm"></div>
+</div>
+
+<div class="card">
+<h2>语音识别</h2>
+<div class="row">
+ <div><label>服务商</label><select id="asr_provider">
+  <option value="qwen3-asr-flash">阿里云百炼（Qwen3-ASR）</option>
+  <option value="volcengine">火山引擎（豆包语音识别极速版）</option>
+  <option value="azure">微软 Azure Speech（与语音合成共用密钥和区域，免费档每月 5 小时）</option>
+  <option value="cloudflare">Cloudflare Workers AI（Whisper large-v3-turbo，免费每天约 200 分钟，不需要密钥；只能在部署到 Cloudflare 的网关上用）</option>
+  <option value="homebox">本地 homebox（SenseVoice，家里的服务）</option></select></div>
+ <div id="asr_model_box"><label>模型</label><input type="text" id="asr_model"></div>
+</div>
+<div id="asr_url_box" class="hide"><label>本地识别服务地址（Cloudflare Tunnel 的公网地址，到 /stt 为止）</label><input type="text" id="asr_url" placeholder="https://asr.example.com/stt"></div>
+<p style="margin:12px 0 0"><button onclick="test('asr')">测试识别</button></p><div class="res" id="res_asr"></div>
+</div>
+
+<div class="card">
+<h2>语音合成</h2>
+<div class="row">
+ <div><label>服务商</label><select id="tts_provider">
+  <option value="cosyvoice">阿里云百炼（CosyVoice）</option>
+  <option value="volcengine">火山引擎（豆包语音合成）</option>
+  <option value="azure">微软 Azure（Neural 语音）</option></select></div>
+ <div id="tts_model_box"><label>模型</label><input type="text" id="tts_model" list="tts_models"><datalist id="tts_models"></datalist></div>
+ <div><label>音色 <a href="#" id="voices_btn" class="hide" onclick="loadVoices();return false" style="font-size:.8rem">刷新完整列表</a></label><input type="text" id="tts_voice" list="tts_voices"><datalist id="tts_voices"></datalist></div>
+</div>
+<div id="region_box" class="hide"><label>Azure 区域（如 eastasia、japaneast；国内版或自定义主机可填完整域名）</label><input type="text" id="tts_region"></div>
+<div id="cluster_box" class="hide"><label>集群（火山，一般保持 volcano_tts）</label><input type="text" id="tts_cluster"></div>
+<p style="margin:12px 0 0"><button onclick="test('tts')">试听</button> <span id="tts_info" class="hint"></span></p>
+<audio id="tts_audio" controls class="hide" style="width:100%;margin-top:8px"></audio><div class="res" id="res_tts"></div>
+</div>
+
+<div class="card">
+<h2>密钥</h2>
+<p class="hint">留空表示不修改。保存在你自己的 Cloudflare 账号（KV）里，页面里只显示末四位。</p>
+<div id="keys"></div>
+</div>
+
+<div class="card">
+<h2>人设与对话</h2>
+<label>系统提示词</label><textarea id="system"></textarea>
+<div class="row"><div><label>记住最近几轮对话</label><input type="text" id="history_turns"></div>
+<div><label>单次回答最多字数（token）</label><input type="text" id="max_tokens"></div></div>
+</div>
+</div>
+<div class="bar"><button class="pri" id="save" onclick="save()">保存</button><span id="msg"></span></div>
+
+<script>
+const K = new URLSearchParams(location.search).get("k");
+const $ = (id) => document.getElementById(id);
+const API = (p) => p + "?k=" + encodeURIComponent(K);
+const MODELS = {
+  dashscope: ["qwen-plus", "qwen-flash", "qwen3-max", "qwen-turbo"],
+  ark: ["doubao-seed-2-0-lite-260215", "doubao-seed-1-6-250615", "doubao-seed-1-6-flash-250828"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"],
+  responses: ["gpt-5.6-sol", "gpt-6-sol"],
+  custom: []
+};
+const TTS_MODELS = ["cosyvoice-v2", "cosyvoice-v3-flash", "cosyvoice-v3-plus"];
+const VOICES = {
+  cosyvoice: ["longxiaochun_v2", "longanyang", "longwan_v2", "longcheng_v2", "longhua_v2", "longshu_v2"],
+  azure: ["zh-CN-XiaoxiaoMultilingualNeural", "zh-CN-XiaochenMultilingualNeural", "zh-CN-YunyiMultilingualNeural", "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunxiNeural", "zh-CN-YunjianNeural", "zh-CN-XiaochenNeural", "zh-CN-XiaohanNeural", "zh-CN-XiaoshuangNeural", "en-US-JennyNeural", "en-US-GuyNeural"],
+  volcengine: ["zh_female_wanwanxiaohe_moon_bigtts", "zh_female_vv_uranus_bigtts", "BV001_streaming", "BV002_streaming", "zh_male_beijingxiaoye_moon_bigtts"]
+};
+const KEYS = [
+  ["dashscope_key", "阿里云百炼 API Key", "password"],
+  ["ark_key", "火山方舟 API Key", "password"],
+  ["volc_appid", "火山语音 App ID（识别、合成共用）", "text"],
+  ["volc_token", "火山语音 Access Token", "password"],
+  ["azure_key", "微软 Azure Speech 密钥", "password"],
+  ["homebox_token", "本地识别服务访问令牌", "password"],
+  ["deepseek_key", "DeepSeek API Key", "password"],
+  ["custom_key", "自定义 OpenAI 兼容服务 Key", "password"]
+];
+let state = null, toClear = new Set();
+
+function fill(list, id, items){ $(id).innerHTML = items.map(x => "<option value='" + x + "'>").join(""); }
+function refresh(){
+  const p = $("llm_provider").value;
+  fill(0, "llm_models", MODELS[p] || []);
+  $("custom_url").classList.toggle("hide", p !== "custom" && p !== "responses");
+  const tp = $("tts_provider").value;
+  fill(0, "tts_voices", VOICES[tp]);
+  fill(0, "tts_models", tp === "cosyvoice" ? TTS_MODELS : []);
+  $("tts_model_box").classList.toggle("hide", tp !== "cosyvoice");
+  $("cluster_box").classList.toggle("hide", tp !== "volcengine");
+  $("region_box").classList.toggle("hide", tp !== "azure");
+  $("voices_btn").classList.toggle("hide", tp !== "azure");
+  $("asr_url_box").classList.toggle("hide", $("asr_provider").value !== "homebox");
+  $("asr_model_box").classList.toggle("hide", $("asr_provider").value !== "qwen3-asr-flash");
+}
+for (const id of ["llm_provider","tts_provider","asr_provider"]) $(id).addEventListener("change", () => {
+  if (id === "llm_provider") { const first = (MODELS[$("llm_provider").value] || [])[0]; if (first) $("llm_model").value = first; }   // custom has no list: keep what was typed
+  if (id === "tts_provider") { $("tts_voice").value = VOICES[$("tts_provider").value][0]; if ($("tts_provider").value === "cosyvoice") $("tts_model").value = TTS_MODELS[0]; }
+  refresh();
+});
+
+function render(){
+  const c = state.config;
+  $("muse_mode").checked = !!c.muse_mode;
+  $("llm_provider").value = c.llm.provider; $("llm_model").value = c.llm.model; $("llm_search").checked = !!c.llm.search;
+  $("llm_base_url").value = c.llm.base_url || ""; $("llm_extra").value = c.llm.extra || "";
+  $("asr_provider").value = c.asr.provider; $("asr_model").value = c.asr.model || ""; $("asr_url").value = c.asr.url || "";
+  $("tts_provider").value = c.tts.provider; $("tts_model").value = c.tts.model || ""; $("tts_voice").value = c.tts.voice || ""; $("tts_cluster").value = c.tts.cluster || "volcano_tts"; $("tts_region").value = c.tts.region || "eastasia";
+  $("system").value = c.system; $("history_turns").value = c.history_turns; $("max_tokens").value = c.max_tokens;
+  $("keys").innerHTML = KEYS.map(([n, label, type]) =>
+    "<label>" + label + "</label><div class='key'><input type='" + type + "' id='k_" + n + "' autocomplete='off' placeholder='" + (state.secrets[n] ? "" : "未设置") + "'>" +
+    "<button onclick=\"clearKey('" + n + "')\">清除</button></div><div class='st' id='s_" + n + "'>" + (state.secrets[n] || "") + "</div>").join("");
+  refresh();
+}
+async function loadVoices(){
+  const btn = $("voices_btn"); btn.textContent = "加载中…";
+  try {
+    const r = await fetch(API("/admin/voices") + "&region=" + encodeURIComponent($("tts_region").value.trim() || "eastasia"));
+    const d = await r.json();
+    if (!r.ok) { btn.textContent = "失败：" + (d.error || r.status); return; }
+    $("tts_voices").innerHTML = d.voices.map(v => "<option value='" + v.n + "'>" + v.d + "</option>").join("");
+    btn.textContent = "已加载 " + d.voices.length + " 个（点输入框选择或直接输入名字）";
+  } catch (e) { btn.textContent = "失败：" + e.message; }
+}
+function clearKey(n){ toClear.add(n); $("k_" + n).value = ""; $("s_" + n).textContent = "保存后清除"; }
+
+async function load(){
+  const r = await fetch(API("/admin/api"));
+  if (!r.ok) { $("msg").textContent = "无法读取配置（令牌不对？）"; return; }
+  state = await r.json(); render();
+}
+function collect(){
+  const config = {
+    muse_mode: $("muse_mode").checked,
+    system: $("system").value, history_turns: $("history_turns").value, max_tokens: $("max_tokens").value,
+    llm: { provider: $("llm_provider").value, model: $("llm_model").value.trim(), search: $("llm_search").checked, base_url: $("llm_base_url").value.trim(), extra: $("llm_extra").value.trim() },
+    asr: { provider: $("asr_provider").value, model: $("asr_model").value.trim(), url: $("asr_url").value.trim() },
+    tts: { provider: $("tts_provider").value, model: $("tts_model").value.trim(), voice: $("tts_voice").value.trim(), cluster: $("tts_cluster").value.trim(), region: $("tts_region").value.trim() }
+  };
+  const secrets = {};
+  for (const [n] of KEYS) { const v = $("k_" + n).value.trim(); if (v) secrets[n] = v; else if (toClear.has(n)) secrets[n] = null; }
+  return { config, secrets };
+}
+async function save(){
+  $("save").disabled = true; $("msg").textContent = "保存中…";
+  try {
+    const r = await fetch(API("/admin/api"), { method: "POST", body: JSON.stringify(collect()) });
+    if (!r.ok) throw new Error(r.status);
+    toClear.clear(); await load(); $("msg").textContent = "已保存，下一句话生效";
+  } catch (e) { $("msg").textContent = "保存失败：" + e.message; }
+  $("save").disabled = false;
+}
+async function test(service){
+  const box = $("res_" + service); box.style.display = "block"; box.textContent = "测试中…（用的是页面上现在选的服务和模型，密钥用已保存的）";
+  try {
+    const r = await fetch(API("/admin/test"), { method: "POST", body: JSON.stringify({ service, config: collect().config }) });
+    if (r.headers.get("content-type") === "audio/mpeg") {
+      const blob = await r.blob(); const a = $("tts_audio"); a.src = URL.createObjectURL(blob); a.classList.remove("hide"); a.play().catch(() => {});
+      box.textContent = "合成成功：" + r.headers.get("x-ms") + " ms，" + r.headers.get("x-parts") + " 段并行，" + Math.round(blob.size / 1024) + " KB"; return;
+    }
+    const d = await r.json();
+    box.textContent = d.ok ? ("成功，" + d.ms + " ms\n" + (d.text || "") + (d.note ? "\n(" + d.note + ")" : "")) : ("失败：" + (d.error || JSON.stringify(d)));
+  } catch (e) { box.textContent = "失败：" + e.message; }
+}
+load();
+</script>
+</body>
+</html>

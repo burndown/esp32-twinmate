@@ -8,24 +8,27 @@
 
 两部分：
 
-- `worker/`：一个 Cloudflare Worker（网关）。固件只会说三个 HTTP 接口，网关把它们翻译成各家云的 API，并带一个**设置页**，在浏览器里选服务商、填密钥。
+- `worker/`：**Cloudflare 版网关**，只做语音识别、语音合成和 Grok Bot。固件只会说几个 HTTP 接口，网关把它们翻译成云服务的 API，并带一个**设置页**，在浏览器里选识别服务商、填 Azure 密钥、Grok Bot 的 Webhook 和 WireGuard 服务器信息。识别用 Cloudflare Workers AI 的 Whisper（免费、不要密钥）或 Azure Speech，合成用 Azure Speech。没有大模型。
+- `worker-home/`：**完整版网关**，我自己在家里用：多家大模型（含联网搜索）、阿里和火山的识别与合成、本地 SenseVoice，可以跑在家里的服务器上（见下面"家里版网关"）。它带大模型，所以也能在 Muse 连不上或 Bot 没响应时由模型接手。
 - `firmware/`：给上游 Muse 固件打的补丁。按住说话后，录音不再上传给 Muse，而是交给网关识别，识别出的文字交给网关里的大模型，回复一句一句送去合成语音播放，界面和字幕还是 Muse 的。网关连不上时，会把文字交给 Muse 云端（回退）。
 
 ```mermaid
 flowchart LR
   board["<b>ESP32-S3 板子</b><br/>麦克风 → 固件 → 喇叭 + 屏幕"]
-  gw["<b>Cloudflare Worker</b><br/>/stt  /chat  /tts<br/>设置页 /admin"]
-  asr["语音识别<br/>阿里 Qwen3-ASR / 火山豆包"]
-  llm["大模型（可联网搜索）<br/>阿里通义 / 火山豆包 / DeepSeek / 自定义"]
-  tts["语音合成<br/>阿里 CosyVoice / 火山豆包"]
-  muse["Muse 云端<br/>（仅回退）"]
+  gw["<b>Cloudflare Worker</b><br/>/stt  /tts  /chat<br/>设置页 /admin"]
+  asr["语音识别<br/>Cloudflare Whisper / Azure"]
+  tts["语音合成<br/>Azure Speech"]
+  bot["Grok Bot<br/>（Webhook，答案回调到网关）"]
+  muse["Muse 云端"]
   board -->|"① 录音 PCM"| gw --> asr
-  board -->|"② 识别出的文字"| gw --> llm
-  board -->|"③ 一句文字 → MP3"| gw --> tts
-  board -.->|"网关不可用时"| muse
+  board -->|"② 一句文字 → MP3"| gw --> tts
+  board -->|"③ 选了 Grok Bot：识别出的文字"| gw --> bot
+  board -->|"④ 选了 Muse：识别出的文字，直接发给 Muse"| muse
 ```
 
-## 支持的服务商
+## 支持的服务商（完整版 `worker-home/`）
+
+`worker/`（Cloudflare 版）只有 Cloudflare Workers AI（Whisper）和 Azure Speech 两家；下表是完整版的。
 
 | | 阿里云百炼 | 火山引擎 | 微软 | 其他 |
 |---|---|---|---|---|
@@ -44,7 +47,9 @@ flowchart LR
 
 Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Azure 取回全部音色（几百个）供选择。
 
-> **验证状态（如实说明）**：阿里云整套、Azure 合成、本地 SenseVoice 识别，以及固件在 Waveshare ESP32-S3-Touch-AMOLED-1.75C 上的完整一轮（识别、回答、播报），我在真机上都用过。**火山方舟、火山语音识别和合成、DeepSeek 是照着开源实现写的，没有用真实密钥跑过**，设置页每一项都有"测试"按钮，请先测再用。火山方舟的联网搜索接口尤其没验证。固件里"识别回退"、"Muse 等太久改用网关的模型"、"Muse 连接中途断开后继续"这几条保险是按代码写的，没有在真机上人为制造故障验证。
+> **精简后的 Cloudflare 版（`worker/`）在测试 Worker 上重新测过**：健康检查、设置页和设置接口（按段合并保存）、Cloudflare Whisper 识别（短句约 1.2 到 2.9 秒，冷启动 7 秒）、Azure 识别、Azure 合成（约 2.4 秒，3 段拼接）、测试按钮、真机器人（约 19 秒拿到回答）、WireGuard 申请（同一把密钥两次得到同一个地址）都通过；录音近乎静音时直接返回空。设置页本身我只请求到了 HTML 和接口，**没有在浏览器里点过**。
+
+**验证状态（如实说明）**：阿里云整套、Azure 合成、本地 SenseVoice 识别，以及固件在 Waveshare ESP32-S3-Touch-AMOLED-1.75C 上的完整一轮（识别、回答、播报），我在真机上都用过。**火山方舟、火山语音识别和合成、DeepSeek 是照着开源实现写的，没有用真实密钥跑过**，设置页每一项都有"测试"按钮，请先测再用。火山方舟的联网搜索接口尤其没验证。固件里"识别回退"、"Muse 等太久改用网关的模型"、"Muse 连接中途断开后继续"这几条保险是按代码写的，没有在真机上人为制造故障验证。
 
 ## 纯云端部署（不需要家里的电脑）
 
@@ -101,14 +106,21 @@ npx wrangler secret put GATEWAY_TOKEN                 # 粘贴上面的令牌
 npx wrangler deploy
 ```
 
-然后打开 `https://<你的worker>.workers.dev/admin?k=<令牌>`：选大模型、识别、合成各自的服务商和模型，填密钥，点“保存”，再用每一项的“测试”按钮验证。保存后下一句话就生效，不用重刷固件。
+然后打开 `https://<你的worker>.workers.dev/admin?k=<令牌>`，一个页面里设置全部：
+- **这个网关**：固件里要填的三个地址，以及 Workers AI 和 Durable Object 两个绑定是否在。
+- **语音识别**：Cloudflare Workers AI（Whisper，免费）或 Azure Speech，和语言。
+- **语音合成**：Azure 的区域、音色（可以拉取完整音色列表）和 Azure Speech 密钥。
+- **Grok Bot**：Webhook 地址和授权（存成密钥，页面只显示末四位）、可选的回调域名，以及“测试 Grok Bot”按钮（会真的问它一句）。机器人的“允许访问的外部地址”里要加上页面里显示的这个网关的域名。
+- **WireGuard**：服务器公钥、地址、端口、隧道网段；下面列出申请过隧道的设备，每个设备一行 `wg set` 命令和“复制命令”按钮，你把它在 WireGuard 服务器上执行就是批准。页面里不存任何私钥。
+
+每一项都有“测试”按钮。保存是按段合并的，只改你改的那一段。**保存后最多约一分钟生效**：Cloudflare KV 的读取有缓存，设备列表也一样。
 
 要点：
 
 - 所有请求都要带 `?k=<令牌>`，否则返回 403，防止别人刷你的额度。
-- 页面里保存的密钥放在你自己 Cloudflare 账号的 KV 里（明文），页面只显示末四位。更严格的做法是用 `wrangler secret put DASHSCOPE_API_KEY` 等（网关也认这些环境变量）。
-- 火山语音的免费额度只有 2 路并发，网关对火山合成只并行 2 路；阿里云合成最多并行 6 路。
-- 网关每次把当前北京时间写进系统提示词，因为板子没有时钟、大模型自己也不知道今天几号。
+- 页面里保存的密钥放在你自己 Cloudflare 账号的 KV 里（明文），页面只显示末四位。更严格的做法是用 `wrangler secret put AZURE_SPEECH_KEY`、`GROKBOT_URL`、`GROKBOT_AUTH` 等（网关也认这些环境变量，WireGuard 的服务器信息也可以用 `WG_SERVER_PUB`、`WG_ENDPOINT`、`WG_PORT`、`WG_SUBNET`）。
+- Azure 免费档同时只能有 1 个实时请求，网关对合成最多并行 3 路，被限流（429）时会退避重试。
+- Whisper 对静音会编出“字幕志愿者”之类的字幕，网关在录音几乎没有声音时直接返回空，并过滤这类字幕。
 
 ## 家里版网关（推荐）
 
@@ -117,7 +129,7 @@ npx wrangler deploy
 ```bash
 mkdir -p ~/home-gateway/src && cd ~/home-gateway
 cp /path/to/repo/home/package.json /path/to/repo/home/wrangler.toml .
-cp /path/to/repo/worker/src/index.js /path/to/repo/worker/src/admin.html src/
+cp /path/to/repo/worker-home/src/index.js /path/to/repo/worker-home/src/admin.html src/
 npm install
 printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .dev.vars
 # then install home/muse-home-gateway.service (fill in YOUR_USER and YOUR_LAN_IP) as a systemd unit
@@ -181,6 +193,6 @@ python -m esptool --chip esp32s3 --port <串口> -b 460800 write-flash "@flash_a
 
 ## 许可与致谢
 
-- `worker/` 为 MIT 许可（见 [LICENSE](LICENSE)）。
+- `worker/` 和 `worker-home/` 为 MIT 许可（见 [LICENSE](LICENSE)）。
 - `firmware/muse-cloud.patch` 是对上游 Muse Gadgets SDK 的修改，遵循上游的 [Apache-2.0](https://github.com/facebookincubator/muse-gadget-sdk/blob/main/LICENSE)；其中的 16×16 中文字库数据来自 [GNU Unifont](https://unifoundry.com/unifont/) 16.0.04（GPLv2+ 带字体嵌入例外，另有 OFL-1.1 双许可）。
 - 各家服务商的接口写法参考了 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)（MIT）和字节跳动的 agentkit-samples（Apache-2.0）。
