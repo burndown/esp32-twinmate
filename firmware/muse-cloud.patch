@@ -304,7 +304,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..c445e30 100644
+index 2866f5d..b2f94ca 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -324,15 +324,16 @@ index 2866f5d..c445e30 100644
  
  extern "C" {
  #include "cJSON.h"
-@@ -69,6 +73,7 @@ extern "C" {
+@@ -69,6 +73,8 @@ extern "C" {
  #include "muse_account_api.h"
  #include "muse_link.h"
  #include "muse_settings.h"
++#include "muse_wg.h"
 +#include "muse_state.h"
  #include "muse_wifi.h"
  }
  #include "muse_chat_priv.h"
-@@ -105,7 +110,7 @@ static const char *TAG = "muse_chat_session";
+@@ -105,7 +111,7 @@ static const char *TAG = "muse_chat_session";
  #define MP3_POLL_ROOM (SCRATCH + 8192)     /* stop reading the socket below this much MP3 room */
  static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP3 buffer empty");
  #define EV_TEXT 72
@@ -341,7 +342,7 @@ index 2866f5d..c445e30 100644
  #define SPEECH_CHARS_PER_S 14              /* until the speech's length is known */
  #define TEXT_CHARS_PER_S 16                /* speaker off: reading pace, a little over speech */
  #define TEXT_HOLD_S 2                      /* speaker off: how long a message's last lines stay up */
-@@ -117,7 +122,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
+@@ -117,7 +123,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
  #define AUTO_RETRY_MAX_US (120 * 1000000LL)
  #define FINAL_TIMEOUT_US (15 * 1000000LL)  /* release -> final transcript */
  #define REPLY_TIMEOUT_US (60 * 1000000LL)  /* chat posted -> first assistant message */
@@ -350,7 +351,7 @@ index 2866f5d..c445e30 100644
  #define SETTLE_US (3 * 1000000LL)          /* quiet period that ends a turn */
  #define BUSY_HOLD_US (20 * 1000000LL)      /* how long a busy agent keeps it open */
  #define TEXT_REPLY_TIMEOUT_US (5 * 60 * 1000000LL)   /* typed turns: agents can work a while */
-@@ -136,7 +141,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
+@@ -136,7 +142,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
  
  /* ---- Voice task <-> session task ---- */
  
@@ -359,7 +360,7 @@ index 2866f5d..c445e30 100644
  
  struct cmd_t {
      cmd_type_t type;
-@@ -209,6 +214,7 @@ struct msg_t {
+@@ -209,6 +215,7 @@ struct msg_t {
      tts_t tts;
      uint32_t pcm_start;      /* where its speech starts in the reply audio */
      uint32_t pcm_frames;     /* how long it is; 0 until the MP3 has all arrived */
@@ -367,7 +368,7 @@ index 2866f5d..c445e30 100644
  };
  
  struct resampler_t {
-@@ -221,6 +227,8 @@ struct turn_t {
+@@ -221,6 +228,8 @@ struct turn_t {
      phase_t phase;
      uint32_t gen;
      bool text;               /* typed at the console: the reply goes there, unspoken */
@@ -376,7 +377,7 @@ index 2866f5d..c445e30 100644
      bool end_requested, end_sent, chat_posted, acked;
      int64_t dict_id, chat_id;
      int64_t start_us, end_sent_us, chat_us, last_event_us, last_content_us;
-@@ -958,8 +966,13 @@ static void turn_reset_streams(void)
+@@ -958,8 +967,13 @@ static void turn_reset_streams(void)
      }
  }
  
@@ -390,7 +391,7 @@ index 2866f5d..c445e30 100644
      turn_reset_streams();
      s_turn.phase = P_IDLE;
      s_turn.dict_id = s_turn.chat_id = 0;
-@@ -990,7 +1003,7 @@ static void turn_done(bool complete)
+@@ -990,7 +1004,7 @@ static void turn_done(bool complete)
  }
  
  /* Ends any turn in progress and starts a fresh one. False if Hatch can't be reached. */
@@ -399,7 +400,7 @@ index 2866f5d..c445e30 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1026,504 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1027,508 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -552,9 +553,11 @@ index 2866f5d..c445e30 100644
 +    if (s_brain.muse_down) {
 +        cJSON_AddTrueToObject(body, "muse_down");   /* the brain answers with its fallback provider */
 +    }
-+    if (!at_home()) {
++    if (!at_home() && muse_settings_away_mode() == 1) {
 +        cJSON_AddTrueToObject(body, "away");   /* away from the home Wi-Fi: the gateway hands the question to the Grok Bot */
-+    }
++    } else if (!at_home() && muse_settings_away_mode() == 2) {
++        cJSON_AddTrueToObject(body, "gemini"); /* away, and asked to use the model: no Muse, no bot */
++    }   /* away with Muse chosen: asked like at home (the gateway answers 503, the device asks Muse) */
 +    char *json = cJSON_PrintUnformatted(body);
 +    cJSON_Delete(body);
 +    const char *urls[2] = { CONFIG_MUSE_BRAIN_URL, nullptr };
@@ -566,6 +569,7 @@ index 2866f5d..c445e30 100644
 +    for (int u = 0; u < 2 && urls[u] && !got && !answered && json; u++) {
 +    esp_http_client_config_t cfg = {};
 +    cfg.url = urls[u];
++    cfg.if_name = const_cast<struct ifreq *>(muse_wg_sta_if());   /* straight out of Wi-Fi, never round by the tunnel */
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
 +    cfg.timeout_ms = 300000   /* a cloud bot may take minutes; the gateway speaks an acknowledgement first */;
@@ -614,7 +618,7 @@ index 2866f5d..c445e30 100644
 +    if (text != s_brain.text) {
 +        strlcpy(s_brain.text, text, sizeof(s_brain.text));
 +    }
-+    if (!muse_down && !at_home()) {
++    if (!muse_down && !at_home() && muse_settings_away_mode() != 0) {
 +        /* Away from home Muse is usually out of reach: the brain answers at once, without Muse being asked first
 +         * (and without a long wait for a connection that will not come). */
 +        muse_down = true;
@@ -747,6 +751,7 @@ index 2866f5d..c445e30 100644
 +    bool ok = false;
 +    esp_http_client_config_t cfg = {};
 +    cfg.url = url;
++    cfg.if_name = const_cast<struct ifreq *>(muse_wg_sta_if());   /* straight out of Wi-Fi, never round by the tunnel */
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* an https gateway needs it; harmless for plain http */
 +    cfg.method = HTTP_METHOD_POST;
 +    cfg.timeout_ms = timeout_ms;
@@ -906,7 +911,7 @@ index 2866f5d..c445e30 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1725,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1730,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -942,7 +947,7 @@ index 2866f5d..c445e30 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1945,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +1950,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -1000,7 +1005,7 @@ index 2866f5d..c445e30 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2009,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2014,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -1024,7 +1029,7 @@ index 2866f5d..c445e30 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2098,247 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2103,248 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1065,6 +1070,7 @@ index 2866f5d..c445e30 100644
 +    for (int u = 0; u < 2 && urls[u] && !ok && !answered && json; u++) {
 +    esp_http_client_config_t cfg = {};
 +    cfg.url = urls[u];
++    cfg.if_name = const_cast<struct ifreq *>(muse_wg_sta_if());   /* straight out of Wi-Fi, never round by the tunnel */
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
 +    cfg.timeout_ms = 15000;
@@ -1289,7 +1295,7 @@ index 2866f5d..c445e30 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2398,39 @@ static void decode(void)
+@@ -1598,6 +2404,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1329,7 +1335,7 @@ index 2866f5d..c445e30 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2510,9 @@ static void check_turn(void)
+@@ -1677,6 +2516,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1339,7 +1345,7 @@ index 2866f5d..c445e30 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2721,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2727,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1368,7 +1374,7 @@ index 2866f5d..c445e30 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2794,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2800,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1381,7 +1387,7 @@ index 2866f5d..c445e30 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2813,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2819,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1391,7 +1397,7 @@ index 2866f5d..c445e30 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2822,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2828,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1411,7 +1417,7 @@ index 2866f5d..c445e30 100644
                  s_auto_next_us = 0;
                  s_auto_backoff_us = AUTO_RETRY_MIN_US;
 -            } else if (muse_hatch_configured() && now_us() >= s_auto_next_us) {
-+            } else if (muse_hatch_configured() && at_home() &&   /* away from home Muse is usually out of reach: no attempts */
++            } else if (muse_hatch_configured() && (at_home() || muse_settings_away_mode() == 0) &&   /* away from home Muse is usually out of reach: no attempts */
 +                       (now_us() >= s_auto_next_us || (s_auto_next_us == INT64_MAX && muse_settings_pushes_on())) &&
 +                       !(s_turn.local_stt && s_turn.phase != P_IDLE)) {
 +                /* Closed when idle, then All messages turned on: connect again for pushes. */
@@ -1420,7 +1426,7 @@ index 2866f5d..c445e30 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2866,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2872,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1429,7 +1435,7 @@ index 2866f5d..c445e30 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2884,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2890,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1439,7 +1445,7 @@ index 2866f5d..c445e30 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +2992,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +2998,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1456,7 +1462,7 @@ index 2866f5d..c445e30 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3034,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3040,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
@@ -24122,28 +24128,30 @@ index 0000000..b6d14a0
 +}
 +#endif
 diff --git a/esp32/components/muse/muse_settings.c b/esp32/components/muse/muse_settings.c
-index 4b0dda9..ca74517 100644
+index 4b0dda9..667df67 100644
 --- a/esp32/components/muse/muse_settings.c
 +++ b/esp32/components/muse/muse_settings.c
-@@ -34,6 +34,9 @@ static const char *TAG = "muse_settings";
+@@ -34,6 +34,10 @@ static const char *TAG = "muse_settings";
  static struct {
      uint8_t volume;
      bool speaker_on;
 +    bool pushes_on;
 +    bool eyes_on;
++    uint8_t away_mode;    /* 0 Muse, 1 Grok Bot, 2 Gemini */
 +    uint8_t avatar;       /* 0 eyes, 1 pixel, 2 picture; eyes_on mirrors avatar == 0 */
      uint8_t mic_gain;
      uint8_t brightness;
      uint16_t sleep_s;
-@@ -47,6 +50,7 @@ static struct {
+@@ -47,6 +51,8 @@ static struct {
  } s = {
      .volume = CONFIG_MUSE_DEFAULT_VOLUME,
      .speaker_on = true,
 +    .eyes_on = true,
++    .away_mode = 1,
      .mic_gain = 30,
      .brightness = 100,
      .sleep_s = 120,
-@@ -118,6 +122,17 @@ esp_err_t muse_settings_init(void)
+@@ -118,6 +124,20 @@ esp_err_t muse_settings_init(void)
      if (nvs_get_u8(s_nvs, "speaker", &b) == ESP_OK) {
          s.speaker_on = b;
      }
@@ -24153,6 +24161,9 @@ index 4b0dda9..ca74517 100644
 +    if (nvs_get_u8(s_nvs, "eyes", &b) == ESP_OK) {
 +        s.eyes_on = b;
 +    }
++    if (nvs_get_u8(s_nvs, "away_mode", &b) == ESP_OK && b <= 2) {
++        s.away_mode = b;
++    }
 +    s.avatar = s.eyes_on ? 0 : 1;
 +    if (nvs_get_u8(s_nvs, "avatar", &b) == ESP_OK && b <= 2) {
 +        s.avatar = b;
@@ -24161,17 +24172,18 @@ index 4b0dda9..ca74517 100644
      load_u8("mic_gain", &s.mic_gain);
      load_u8("bright", &s.brightness);
      nvs_get_u16(s_nvs, "sleep_s", &s.sleep_s);
-@@ -149,6 +164,9 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
+@@ -149,6 +169,10 @@ void muse_settings_set_listener(muse_setting_cb_t cb)
  
  int muse_settings_volume(void) { return s.volume; }
  bool muse_settings_speaker_on(void) { return s.speaker_on; }
 +bool muse_settings_pushes_on(void) { return s.pushes_on; }
 +bool muse_settings_eyes_on(void) { return s.avatar == 0; }
 +int muse_settings_avatar(void) { return s.avatar; }
++int muse_settings_away_mode(void) { return s.away_mode; }
  int muse_settings_mic_gain(void) { return s.mic_gain; }
  int muse_settings_brightness(void) { return s.brightness; }
  int muse_settings_sleep_s(void) { return s.sleep_s; }
-@@ -205,6 +223,26 @@ void muse_settings_set_speaker_on(bool on)
+@@ -205,6 +229,32 @@ void muse_settings_set_speaker_on(bool on)
      notify(MUSE_SETTING_SPEAKER);
  }
  
@@ -24187,6 +24199,12 @@ index 4b0dda9..ca74517 100644
 +    muse_settings_set_avatar(on ? 0 : 1);
 +}
 +
++void muse_settings_set_away_mode(int which)
++{
++    s.away_mode = which < 0 ? 0 : (which > 2 ? 2 : which);
++    save_u8("away_mode", s.away_mode);
++}
++
 +void muse_settings_set_avatar(int which)
 +{
 +    s.avatar = which < 0 ? 0 : (which > 2 ? 2 : which);
@@ -24199,7 +24217,7 @@ index 4b0dda9..ca74517 100644
  {
      s.mic_gain = clampi(db, 0, MUSE_MIC_GAIN_MAX);
 diff --git a/esp32/components/muse/muse_settings.h b/esp32/components/muse/muse_settings.h
-index 705a5cb..aa3fae9 100644
+index 705a5cb..972ca0d 100644
 --- a/esp32/components/muse/muse_settings.h
 +++ b/esp32/components/muse/muse_settings.h
 @@ -45,6 +45,7 @@ typedef enum {
@@ -24210,28 +24228,30 @@ index 705a5cb..aa3fae9 100644
  } muse_setting_t;
  
  typedef void (*muse_setting_cb_t)(muse_setting_t what);
-@@ -54,6 +55,9 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
+@@ -54,6 +55,10 @@ void muse_settings_set_listener(muse_setting_cb_t cb);
  
  int muse_settings_volume(void);         /* 0..100 */
  bool muse_settings_speaker_on(void);    /* off: replies are shown, not played */
 +bool muse_settings_pushes_on(void);     /* on: messages Muse sends unasked are shown and played */
 +bool muse_settings_eyes_on(void);       /* the eyes avatar (muse_settings_avatar() == 0) */
++int muse_settings_away_mode(void);      /* who answers away from the home Wi-Fi: 0 Muse, 1 Grok Bot (default), 2 Gemini */
 +int muse_settings_avatar(void);         /* 0 eyes, 1 Muse's pixel character, 2 your own picture (muse_photo.h) */
  int muse_settings_mic_gain(void);       /* dB, 0..MUSE_MIC_GAIN_MAX */
  int muse_settings_brightness(void);     /* 10..100 */
  int muse_settings_sleep_s(void);        /* 0 = never */
-@@ -68,6 +72,9 @@ size_t muse_settings_hatch_token_len(void);
+@@ -68,6 +73,10 @@ size_t muse_settings_hatch_token_len(void);
  
  void muse_settings_set_volume(int pct);
  void muse_settings_set_speaker_on(bool on);
 +void muse_settings_set_pushes_on(bool on);
 +void muse_settings_set_eyes_on(bool on);
 +void muse_settings_set_avatar(int which);
++void muse_settings_set_away_mode(int which);
  void muse_settings_set_mic_gain(int db);
  void muse_settings_set_brightness(int pct);
  void muse_settings_set_sleep_s(int secs);
 diff --git a/esp32/components/muse/muse_settings_ui.c b/esp32/components/muse/muse_settings_ui.c
-index 6a372ac..53e8d28 100644
+index 6a372ac..b4cabb9 100644
 --- a/esp32/components/muse/muse_settings_ui.c
 +++ b/esp32/components/muse/muse_settings_ui.c
 @@ -31,12 +31,14 @@
@@ -24254,7 +24274,7 @@ index 6a372ac..53e8d28 100644
  static lv_obj_t *s_tile;
  static lv_obj_t *s_current;
 -static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text;
-+static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text, *s_wg, *s_avatar;
++static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text, *s_wg, *s_avatar, *s_away;
  
  /*
   * Only home is kept. A sub-page is built when it opens and deleted on the way
@@ -24263,7 +24283,7 @@ index 6a372ac..53e8d28 100644
  
  /* Home values. */
 -static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_about;
-+static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_home_wg, *s_home_avatar, *s_about;
++static lv_obj_t *s_home_wifi, *s_home_hatch, *s_home_ble, *s_home_sound, *s_home_sleep, *s_home_battery, *s_home_wg, *s_home_avatar, *s_home_away, *s_about;
  
  /* Wi-Fi page. */
  static lv_obj_t *s_wifi_sw, *s_wifi_status, *s_wifi_saved, *s_wifi_scan_btn, *s_wifi_scan_lbl, *s_wifi_list;
@@ -24272,7 +24292,7 @@ index 6a372ac..53e8d28 100644
  static void drop(lv_obj_t *p)
  {
 -    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text };
-+    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text, &s_wg, &s_avatar };
++    lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text, &s_wg, &s_avatar, &s_away };
      for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
          if (*pages[i] == p) {
              *pages[i] = NULL;
@@ -24298,7 +24318,7 @@ index 6a372ac..53e8d28 100644
      s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
      s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
  
-@@ -1144,6 +1154,121 @@ static void tick_sleep(void)
+@@ -1144,6 +1154,157 @@ static void tick_sleep(void)
      }
  }
  
@@ -24349,6 +24369,42 @@ index 6a372ac..53e8d28 100644
 +        st = muse_photo_present() ? "A picture is stored." : "No picture yet: put one on the gateway, then Get picture.";
 +    }
 +    set_text(s_av_status, st);
++}
++
++/* ---------- Away ---------- */
++
++static lv_obj_t *s_away_checks[3];
++
++static void on_away_choice(lv_event_t *e)
++{
++    muse_settings_set_away_mode((int)(intptr_t)lv_event_get_user_data(e));
++}
++
++static const char *away_name(void)
++{
++    static const char *const NAMES[] = { "Muse", "Grok Bot", "Gemini" };
++    return NAMES[muse_settings_away_mode()];
++}
++
++static void build_away_page(lv_obj_t *tile)
++{
++    static const char *const NAMES[] = { "Muse", "Grok Bot", "Gemini" };
++    lv_obj_t *list;
++    s_away = page(tile, "AWAY", true, &list);
++    note(list, "Away from the home Wi-Fi, questions go to:");
++    for (int i = 0; i < 3; i++) {
++        row(list, NULL, NAMES[i], &s_away_checks[i], on_away_choice, (void *)(intptr_t)i);
++        lv_obj_set_style_text_color(s_away_checks[i], lv_color_hex(COLOR_ACCENT), 0);
++    }
++    note(list, "At home it is always Muse. Speech and recognition use the public address, not the tunnel.");
++}
++
++static void tick_away(void)
++{
++    int cur = muse_settings_away_mode();
++    for (int i = 0; i < 3; i++) {
++        set_text(s_away_checks[i], cur == i ? LV_SYMBOL_OK : "");
++    }
 +}
 +
 +/* ---------- WireGuard ---------- */
@@ -24420,37 +24476,42 @@ index 6a372ac..53e8d28 100644
  /* ---------- Battery ---------- */
  
  static void on_battery_reset(lv_event_t *e)
-@@ -1287,6 +1412,8 @@ static const page_t BLE = { &s_ble, build_ble_page };
+@@ -1287,6 +1448,9 @@ static const page_t BLE = { &s_ble, build_ble_page };
  static const page_t SOUND = { &s_sound, build_sound_page };
  static const page_t SLEEP = { &s_sleep, build_sleep_page };
  static const page_t BATTERY = { &s_battery, build_battery_page };
 +static const page_t WG = { &s_wg, build_wg_page };
 +static const page_t AVATAR = { &s_avatar, build_avatar_page };
++static const page_t AWAY = { &s_away, build_away_page };
  static const page_t POWER = { &s_power, build_power_page };
  
  static void build_home(lv_obj_t *tile)
-@@ -1297,6 +1424,8 @@ static void build_home(lv_obj_t *tile)
+@@ -1297,6 +1461,9 @@ static void build_home(lv_obj_t *tile)
      row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
      row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
      row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
++    row(list, LV_SYMBOL_GPS, "Away", &s_home_away, on_nav, (void *)&AWAY);
 +    row(list, LV_SYMBOL_IMAGE, "Avatar", &s_home_avatar, on_nav, (void *)&AVATAR);
 +    row(list, LV_SYMBOL_UPLOAD, "WireGuard", &s_home_wg, on_nav, (void *)&WG);
      row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
      row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
      if (muse_board->power_off) {
-@@ -1325,6 +1454,8 @@ static void tick_home(void)
+@@ -1325,6 +1492,9 @@ static void tick_home(void)
      } else {
          set_text(s_home_sound, "Muted");
      }
++    set_text(s_home_away, away_name());
 +    set_text(s_home_avatar, avatar_name());
 +    set_text(s_home_wg, muse_wg_mode() == MUSE_WG_OFF ? "Off" : muse_wg_state_name(muse_wg_state()));
      set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
  
      muse_power_t p = muse_state_power();
-@@ -1376,6 +1507,10 @@ void muse_settings_ui_tick(bool visible)
+@@ -1376,6 +1546,12 @@ void muse_settings_ui_tick(bool visible)
          tick_sound();
      } else if (s_current == s_sleep) {
          tick_sleep();
++    } else if (s_current == s_away) {
++        tick_away();
 +    } else if (s_current == s_avatar) {
 +        tick_avatar();
 +    } else if (s_current == s_wg) {
@@ -25152,10 +25213,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..66d2abc
+index 0000000..d62a757
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,578 @@
+@@ -0,0 +1,593 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25179,6 +25240,7 @@ index 0000000..66d2abc
 +#include "esp_random.h"
 +#include "esp_timer.h"
 +#include "esp_wifi.h"
++#include <net/if.h>
 +#include "esp_wireguard.h"
 +#include "lwip/dns.h"
 +#include "lwip/netif.h"
@@ -25224,6 +25286,20 @@ index 0000000..66d2abc
 +static bool s_ctx_ready, s_up;
 +static nvs_handle_t s_nvs;
 +static bool s_nvs_ok;
++
++const struct ifreq *muse_wg_sta_if(void)
++{
++    static struct ifreq r;
++    if (!r.ifr_name[0]) {
++        esp_netif_t *n = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
++        char name[8] = "";
++        if (!n || esp_netif_get_netif_impl_name(n, name) != ESP_OK || !name[0]) {
++            return NULL;
++        }
++        strlcpy(r.ifr_name, name, sizeof(r.ifr_name));
++    }
++    return &r;
++}
 +
 +static void set_err(const char *e) { strlcpy(s_err, e ? e : "", sizeof(s_err)); }
 +
@@ -25736,10 +25812,10 @@ index 0000000..66d2abc
 +}
 diff --git a/esp32/components/muse/muse_wg.h b/esp32/components/muse/muse_wg.h
 new file mode 100644
-index 0000000..2789b9f
+index 0000000..c4b770d
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.h
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,55 @@
 +/*
 + * Local addition: a WireGuard tunnel so Muse's server can be reached from a network that
 + * blocks it. The tunnel is brought up only when needed ("Auto": Muse does not answer a quick
@@ -25751,6 +25827,12 @@ index 0000000..2789b9f
 +
 +#include <stdbool.h>
 +#include <stddef.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct ifreq;
 +
 +typedef enum {
 +    MUSE_WG_OFF,
@@ -25781,8 +25863,16 @@ index 0000000..2789b9f
 +bool muse_wg_enrolling(void);
 +const char *muse_wg_last_error(void);            /* short text of the last set-up or connect failure, or "" */
 +void muse_wg_forget(void);                       /* delete the key and the peer details */
++
++/* The Wi-Fi interface, for esp_http_client_config_t.if_name: requests to the gateway, recognition and speech use it even
++ * while the tunnel is the default route, so they go straight to the public address instead of round by the tunnel's server. */
++const struct ifreq *muse_wg_sta_if(void);
++
++#ifdef __cplusplus
++}
++#endif
 diff --git a/esp32/main/app.c b/esp32/main/app.c
-index b7f076d..357cedf 100644
+index b7f076d..302b740 100644
 --- a/esp32/main/app.c
 +++ b/esp32/main/app.c
 @@ -24,6 +24,7 @@
@@ -25813,7 +25903,7 @@ index b7f076d..357cedf 100644
 +#define CONFIG_MUSE_HOME_SSID ""
 +#endif
 +bool app_away_from_home(void) {
-+    if (!CONFIG_MUSE_HOME_SSID[0]) {
++    if (!CONFIG_MUSE_HOME_SSID[0] || muse_settings_away_mode() == 0) {   // away with Muse chosen: it is still wanted
 +        return false;
 +    }
 +    wifi_ap_record_t ap;

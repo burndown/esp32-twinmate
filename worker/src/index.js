@@ -179,14 +179,15 @@ async function llmStream(cfg, S, messages) {
 }
 
 async function chat(req, env, all, ctx) {
-  const { text: userText, muse_down: museDown, away } = await req.json().catch(() => ({}));
+  const { text: userText, muse_down: museDown, away, gemini } = await req.json().catch(() => ({}));
   // Muse mode: the first ask is answered with 503 so the firmware sends the text to Muse. If Muse stays silent for 30 s
   // the firmware asks again with muse_down:true, and then the configured model answers instead of failing the turn.
-  if (all.cfg.muse_mode && !museDown) return json({ muse: true }, 503);
+  // gemini: the device is away and the user chose the model for that case, so neither Muse nor the bot is asked.
+  if (all.cfg.muse_mode && !museDown && !gemini) return json({ muse: true }, 503);
   if (!userText) return json({ error: "no text" }, 400);
   // Away from home (the firmware says so when it is not on the home Wi-Fi) every turn goes to the Grok Bot; at home
   // only when the bot's name is said first. If the bot cannot be reached the normal model answers.
-  const asked = away ? userText : botAsked(userText);
+  const asked = gemini ? "" : (away ? userText : botAsked(userText));
   if (asked && env.GROKBOT_URL && env.GROKBOT_AUTH) {
     const r = await botChat(req, env, asked, all);
     if (r) return r;
