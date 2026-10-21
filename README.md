@@ -73,7 +73,7 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 
 家里网关只监听内网地址。想让圆圆离家后继续用家里的识别、大模型和语音合成，可以给它一个公网入口，并让固件**按连的 Wi-Fi 名选地址**：是家里的 Wi-Fi 就走内网，其他网络一律走公网，与 Muse 是否配对、能否连上无关。
 
-1. **HTTPS 转发**：`home/gw-proxy.mjs`（Node，无依赖）监听一个公网端口，只放行 `POST /chat`、`/tts`、`/stt`，其余一律 404；每个来源地址每分钟最多 60 次请求，连续 10 次令牌错误（403）会被封 10 分钟。用 `systemd --user` 常驻（`home/gw-proxy.service`，把 `YOUR_DOMAIN` 换成你的域名，把转发目标写进环境变量 `UP_HOST`）。
+1. **HTTPS 转发**：`home/gw-proxy.mjs`（Node，无依赖）监听一个公网端口，只放行 `POST /chat`、`/tts`、`/stt`，其余一律 404；每个来源地址每分钟最多 60 次请求，连续 10 次令牌错误（403）会被封 10 分钟。用 `systemd --user` 常驻：先 `mkdir -p ~/gw-proxy && cp home/gw-proxy.mjs ~/gw-proxy/`，再装 `home/gw-proxy.service`（它启动 `~/gw-proxy/gw-proxy.mjs`；把 `YOUR_DOMAIN` 换成你的域名，把转发目标写进环境变量 `UP_HOST`）。
 2. **证书**：家庭宽带的 80/443 通常是封的，所以用 [acme.sh](https://github.com/acmesh-official/acme.sh) 的 **DNS 验证**签 Let's Encrypt 证书；续期后给转发服务发 `SIGHUP` 即可热加载，不用重启。密钥只放在你自己服务器上权限 600 的文件里。
 3. **路由器**：加一条 `公网端口 → 网关所在机器:同一端口` 的 DNAT 转发。如果公网地址是动态的，用 DDNS 让域名跟着走。
 4. **固件**：Kconfig 里设置 `MUSE_HOME_SSID`（家里 Wi-Fi 名），以及三个备用地址 `MUSE_STT_FALLBACK_URL`、`MUSE_BRAIN_FALLBACK_URL`、`MUSE_TTS_FALLBACK_URL`（指向公网入口）。没设置 `MUSE_HOME_SSID` 时，固件改为对内网地址做 1.5 秒的 TCP 连接探测，不通就在 90 秒内改用备用地址。内网地址上请求失败（没收到任何数据）时，也会在备用地址上重试一次。

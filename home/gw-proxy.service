@@ -6,7 +6,7 @@ After=network-online.target
 Environment=PORT=18443
 Environment=CERT=%h/.acme.sh/YOUR_DOMAIN_ecc/fullchain.cer
 Environment=KEY=%h/.acme.sh/YOUR_DOMAIN_ecc/YOUR_DOMAIN.key
-ExecStart=/usr/bin/env node %h/gw-proxy/server.mjs
+ExecStart=/usr/bin/env node %h/gw-proxy/gw-proxy.mjs
 Restart=always
 RestartSec=5
 

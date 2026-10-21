@@ -26,6 +26,15 @@ function reject(ip) {
   if (++h.bad >= 10) { h.until = Date.now() + 10 * 60000; h.bad = 0; console.log("blocked", ip); }
 }
 
+// Forget addresses that have been quiet for a while, so the table cannot grow for months on scanner traffic.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, h] of hits) {
+    h.t = h.t.filter((x) => now - x < 60000);
+    if (!h.t.length && now > h.until) hits.delete(ip);
+  }
+}, 10 * 60000).unref();
+
 function ctx() { return { key: fs.readFileSync(KEY), cert: fs.readFileSync(CERT) }; }
 const server = https.createServer(ctx(), (req, res) => {
   const ip = client(req);

@@ -362,7 +362,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..680de67 100644
+index 2866f5d..02aac43 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -400,9 +400,12 @@ index 2866f5d..680de67 100644
  #define SPEECH_CHARS_PER_S 14              /* until the speech's length is known */
  #define TEXT_CHARS_PER_S 16                /* speaker off: reading pace, a little over speech */
  #define TEXT_HOLD_S 2                      /* speaker off: how long a message's last lines stay up */
-@@ -117,7 +123,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
+@@ -115,9 +121,9 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
+ #define IDLE_CLOSE_US (10 * 60 * 1000000LL)
+ #define AUTO_RETRY_MIN_US (5 * 1000000LL)  /* connecting without a turn, after a failure */
  #define AUTO_RETRY_MAX_US (120 * 1000000LL)
- #define FINAL_TIMEOUT_US (15 * 1000000LL)  /* release -> final transcript */
+-#define FINAL_TIMEOUT_US (15 * 1000000LL)  /* release -> final transcript */
++#define FINAL_TIMEOUT_US (20 * 1000000LL)  /* release -> final transcript; longer than a 5 s primary plus most of a 12 s fallback recogniser */
  #define REPLY_TIMEOUT_US (60 * 1000000LL)  /* chat posted -> first assistant message */
 -#define TURN_CAP_US (180 * 1000000LL)
 +#define TURN_CAP_US (300 * 1000000LL)      /* local: raised from 180 s so a long spoken reply isn't cut off */
@@ -458,7 +461,7 @@ index 2866f5d..680de67 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1027,518 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1027,522 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -552,7 +555,8 @@ index 2866f5d..680de67 100644
 +    }
 +}
 +
-+/* On the home Wi-Fi (CONFIG_MUSE_HOME_SSID); true when no home network is configured. */
++/* On the home Wi-Fi (CONFIG_MUSE_HOME_SSID); true when no home network is configured (then a connect probe decides which
++ * server address to use). muse_wg.c's at_home() answers false in that case on purpose. */
 +static bool at_home(void)
 +{
 +    if (!CONFIG_MUSE_HOME_SSID[0]) {
@@ -770,6 +774,9 @@ index 2866f5d..680de67 100644
 + * Muse took the text but nothing came back within MUSE_GIVEUP_US: give up on it
 + * and ask the brain's fallback provider, once. Returns true if that was done.
 + */
++#ifndef CONFIG_MUSE_BRAIN_GIVEUP_SECONDS   /* the option only exists when MUSE_BRAIN_URL is set */
++#define CONFIG_MUSE_BRAIN_GIVEUP_SECONDS 30
++#endif
 +#define MUSE_GIVEUP_US ((int64_t)CONFIG_MUSE_BRAIN_GIVEUP_SECONDS * 1000000LL)   /* see Kconfig; REPLY_TIMEOUT_US still applies when there is no brain */
 +
 +static bool brain_retry_after_silence(void)
@@ -979,7 +986,7 @@ index 2866f5d..680de67 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1740,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1744,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -1015,7 +1022,7 @@ index 2866f5d..680de67 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1960,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +1964,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -1073,7 +1080,7 @@ index 2866f5d..680de67 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2024,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2028,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -1097,7 +1104,7 @@ index 2866f5d..680de67 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2113,248 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2117,248 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1141,7 +1148,7 @@ index 2866f5d..680de67 100644
 +    cfg.if_name = const_cast<struct ifreq *>(muse_wg_sta_if());   /* straight out of Wi-Fi, never round by the tunnel */
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
-+    cfg.timeout_ms = 15000;
++    cfg.timeout_ms = 30000;   /* the gateway sends nothing until the whole piece is synthesised (up to ~35 s of speech) */
 +    esp_http_client_handle_t h = esp_http_client_init(&cfg);
 +    if (h) {
 +        esp_http_client_set_header(h, "Content-Type", "application/json");
@@ -1363,7 +1370,7 @@ index 2866f5d..680de67 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2414,39 @@ static void decode(void)
+@@ -1598,6 +2418,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1403,7 +1410,7 @@ index 2866f5d..680de67 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2526,9 @@ static void check_turn(void)
+@@ -1677,6 +2530,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1413,7 +1420,7 @@ index 2866f5d..680de67 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2737,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2741,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1442,7 +1449,7 @@ index 2866f5d..680de67 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2810,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2814,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1455,7 +1462,7 @@ index 2866f5d..680de67 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2829,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2833,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1465,7 +1472,7 @@ index 2866f5d..680de67 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2838,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2842,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1494,7 +1501,7 @@ index 2866f5d..680de67 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2882,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2886,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1503,7 +1510,7 @@ index 2866f5d..680de67 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2900,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2904,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1513,7 +1520,7 @@ index 2866f5d..680de67 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +3008,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +3012,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1530,7 +1537,7 @@ index 2866f5d..680de67 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3050,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3054,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  
@@ -25299,10 +25306,10 @@ index 7a3ae28..74cf59a 100644
  
 diff --git a/esp32/components/muse/muse_wg.c b/esp32/components/muse/muse_wg.c
 new file mode 100644
-index 0000000..90bf2e8
+index 0000000..d7daf95
 --- /dev/null
 +++ b/esp32/components/muse/muse_wg.c
-@@ -0,0 +1,722 @@
+@@ -0,0 +1,747 @@
 +/* See muse_wg.h. */
 +
 +#include "muse_wg.h"
@@ -25347,6 +25354,7 @@ index 0000000..90bf2e8
 +#define KEY_B64 48
 +#define PROBE_EVERY_US (60LL * 1000000)
 +#define RETRY_AFTER_US (60LL * 1000000)
++#define PEER_LOST_US (45LL * 1000000)   /* how long a lost session may stay lost before the tunnel is rebuilt */
 +
 +#ifndef CONFIG_MUSE_HOME_SSID
 +#define CONFIG_MUSE_HOME_SSID ""
@@ -25502,10 +25510,12 @@ index 0000000..90bf2e8
 +void muse_wg_forget(void)
 +{
 +    s_priv[0] = s_pub[0] = s_srv[0] = s_ep[0] = s_addr[0] = 0;
-+    s_configured = false;
++    s_port = 51820;
++    s_keep = 25;
++    s_configured = false;   /* the manager task sees this and takes the tunnel down */
 +    if (s_nvs_ok) {
-+        const char *keys[] = { "priv", "pub", "srv", "ep", "addr" };
-+        for (size_t i = 0; i < 5; i++) {
++        const char *keys[] = { "priv", "pub", "srv", "ep", "addr", "port", "keep" };
++        for (size_t i = 0; i < 7; i++) {
 +            nvs_erase_key(s_nvs, keys[i]);
 +        }
 +        commit();
@@ -25553,6 +25563,8 @@ index 0000000..90bf2e8
 +    return true;
 +}
 +
++/* Without CONFIG_MUSE_HOME_SSID this says "not at home" so that Auto probes Muse on every network; muse_chat_session.cpp's at_home()
++ * deliberately answers the other way (no SSID: prefer the LAN address and let a connect probe decide). */
 +static bool at_home(void)
 +{
 +    if (!CONFIG_MUSE_HOME_SSID[0]) {
@@ -25940,7 +25952,7 @@ index 0000000..90bf2e8
 +{
 +    (void)arg;
 +    char last_ssid[MUSE_SSID_MAX + 1] = "";
-+    int64_t last_probe = 0, retry_at = 0, auto_enroll_at = 0;
++    int64_t last_probe = 0, retry_at = 0, auto_enroll_at = 0, lost_since = 0;
 +    for (;;) {
 +        vTaskDelay(pdMS_TO_TICKS(3000));
 +        /* Not set up yet: ask for the peer details by itself (once, then every 5 minutes if that failed). */
@@ -25964,6 +25976,7 @@ index 0000000..90bf2e8
 +            continue;
 +        }
 +        if (!s_configured) {
++            tear_down();   /* forgotten while the tunnel was up */
 +            s_state = MUSE_WG_S_NOT_SET;
 +            continue;
 +        }
@@ -25990,10 +26003,29 @@ index 0000000..90bf2e8
 +            continue;
 +        }
 +        if (s_up) {
++            int64_t t = esp_timer_get_time();
 +            if (peer_up()) {
++                lost_since = 0;
 +                s_state = MUSE_WG_S_UP;
++                dns_through_tunnel();   /* a DHCP renewal puts the network's resolver back */
++            } else {
++                /* No session with the server (it restarted, the NAT forgot us, the radio dropped). The library tries again by
++                 * itself, so give it a while; meanwhile names must not be looked up through a tunnel that is not carrying
++                 * anything, and after the grace period the tunnel is rebuilt from scratch. */
++                if (!lost_since) {
++                    lost_since = t;
++                    ESP_LOGW(TAG, "no session with the server");
++                }
++                s_state = MUSE_WG_S_CONNECTING;
++                dns_restore();
++                if (t - lost_since > PEER_LOST_US) {
++                    ESP_LOGW(TAG, "still no session: rebuilding the tunnel");
++                    tear_down();
++                    lost_since = 0;
++                    last_probe = 0;
++                    retry_at = t + 5000000LL;
++                }
 +            }
-+            dns_through_tunnel();   /* a DHCP renewal puts the network's resolver back */
 +            continue;
 +        }
 +        int64_t now = esp_timer_get_time();
