@@ -310,8 +310,11 @@ def overlay(cfg):
          "# Cloudflare serves a cross-signed Google Trust Services chain; without this the TLS handshake fails (-0x3000)",
          "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y"]
     L.append("CONFIG_MUSE_MODEL_ANSWERS=y" if f.get("model_answers") else "# CONFIG_MUSE_MODEL_ANSWERS is not set")
+    L.append("CONFIG_ESP_NETIF_BRIDGE_EN=y")   # the WireGuard module is in every build, tunnel or not; the firmware needs this option anyway
+    if not w.get("enabled"):
+        L.append("CONFIG_MUSE_WG_DEFAULT_MODE=0")   # Off: the device does not ask the gateway for a tunnel (Settings > WireGuard can turn it on)
     if w.get("enabled"):
-        L += ["CONFIG_ESP_NETIF_BRIDGE_EN=y", "CONFIG_MUSE_GATEWAY_VIA_TUNNEL=%s" % ("y" if w.get("via_tunnel", True) else "n"),
+        L += ["CONFIG_MUSE_GATEWAY_VIA_TUNNEL=%s" % ("y" if w.get("via_tunnel", True) else "n"),
               'CONFIG_MUSE_WG_ENDPOINT="%s"' % w["endpoint"], "CONFIG_MUSE_WG_PORT=%d" % int(w.get("port", 51820)),
               'CONFIG_MUSE_WG_SERVER_KEY="%s"' % w["server_public_key"], 'CONFIG_MUSE_WG_ADDRESS="%s"' % w["address"],
               'CONFIG_MUSE_WG_PRIVATE_KEY="%s"' % w["private_key"],

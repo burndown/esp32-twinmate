@@ -44,10 +44,10 @@ index 73c8ffa..b80c40f 100644
      # which its Kconfig can't do. Abort, so the panic handler prints a backtrace
      # and reboots. PUBLIC reaches LVGL and every file that includes lvgl.h.
 diff --git a/esp32/components/muse/Kconfig b/esp32/components/muse/Kconfig
-index 1f65257..ed25e4f 100644
+index 1f65257..131269f 100644
 --- a/esp32/components/muse/Kconfig
 +++ b/esp32/components/muse/Kconfig
-@@ -111,6 +111,138 @@ menu "Muse"
+@@ -111,9 +111,144 @@ menu "Muse"
              depends on IDF_TARGET_ESP32C3
      endchoice
  
@@ -186,6 +186,12 @@ index 1f65257..ed25e4f 100644
      config MUSE_ENABLED
          bool
          default y if !MUSE_BOARD_NONE
++        # The WireGuard tunnel (muse_wg.c) adds an lwIP network interface of its own; without this esp_netif takes that interface's
++        # state for its own pointer and the chip crashes the first time the tunnel starts (even in a build that never configures one).
++        select ESP_NETIF_BRIDGE_EN
+ 
+     # Always defined, unlike the target-dependent board options, so
+     # idf_component.yml rules can select each board's managed components.
 diff --git a/esp32/components/muse/boards/board_waveshare_s3_175c.c b/esp32/components/muse/boards/board_waveshare_s3_175c.c
 index 77b2e35..68aed26 100644
 --- a/esp32/components/muse/boards/board_waveshare_s3_175c.c
