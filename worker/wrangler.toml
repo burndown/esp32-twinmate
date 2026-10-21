@@ -17,3 +17,13 @@ fallthrough = true
 # Workers AI (free allowance of 10,000 neurons a day): lets the settings page offer "Cloudflare Workers AI" for speech recognition. Not needed otherwise.
 [ai]
 binding = "AI"
+
+# Grok Bot (Webhook bot) answers arrive as a separate request; a Durable Object holds each question's state so the answer is seen at once
+# (KV is only eventually consistent). Without this binding the Worker falls back to KV, which can delay the answer by up to a minute.
+[[durable_objects.bindings]]
+name = "BOT"
+class_name = "BotWait"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BotWait"]

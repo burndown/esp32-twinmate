@@ -263,9 +263,75 @@ async function realIp(host) {
   } catch (e) { return ""; }
 }
 
+// ---- state of one Grok Bot question ------------------------------------------------------------------
+// A question waits for the bot's answer, which arrives as a separate request (/bot-reply), possibly handled by another
+// copy of this Worker. On Cloudflare that state lives in a Durable Object (one per question, strongly consistent, free
+// with the SQLite-backed kind); KV is only eventually consistent, so there it would delay the answer by up to a minute.
+// Without the BOT binding (the home gateway) the state is a KV key, polled.
+export class BotWait {
+  constructor(state) { this.state = state; this.waiters = []; }
+  async fetch(req) {
+    const path = new URL(req.url).pathname;
+    const b = await req.json().catch(() => ({}));
+    const v = (await this.state.storage.get("v")) || null;
+    if (path === "/init") {
+      await this.state.storage.put("v", { tok: b.tok, text: null });
+      await this.state.storage.setAlarm(Date.now() + 600000);   // forgotten after 10 minutes
+      return new Response("ok");
+    }
+    if (path === "/reply") {
+      if (!v || v.tok !== b.tok || v.text) return new Response("no", { status: 403 });
+      await this.state.storage.put("v", { tok: v.tok, text: String(b.text) });
+      for (const w of this.waiters.splice(0)) w();
+      return new Response("ok");
+    }
+    if (path === "/wait") {
+      if (!v) return Response.json({ text: null });
+      if (!v.text) await new Promise((res) => { this.waiters.push(res); setTimeout(res, Math.min(+b.ms || 30000, 60000)); });
+      const w = (await this.state.storage.get("v")) || {};
+      return Response.json({ text: w.text || null });
+    }
+    if (path === "/done") { await this.state.storage.deleteAll(); return new Response("ok"); }
+    return new Response("not found", { status: 404 });
+  }
+  async alarm() { await this.state.storage.deleteAll(); }
+}
+const botStub = (env, id) => env.BOT.get(env.BOT.idFromName(id));
+const doCall = (env, id, path, body) => botStub(env, id).fetch("https://bot/" + path, { method: "POST", body: JSON.stringify(body || {}) });
+
+async function botInit(env, id, tok) {
+  if (env.BOT) await doCall(env, id, "init", { tok });
+  else await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
+}
+// Waits up to ms for the answer; returns its text or null.
+async function botWait(env, id, ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (env.BOT) {
+      const r = await doCall(env, id, "wait", { ms: Math.min(until - Date.now(), 30000) });
+      const t = (await r.json().catch(() => ({}))).text;
+      if (t) { await doCall(env, id, "done"); return t; }
+    } else {
+      await new Promise((r) => setTimeout(r, 1500));
+      let v = null;
+      try { v = await env.CFG.get("bot:" + id, "json"); } catch (e) { /* retry */ }
+      if (v && v.text) { await env.CFG.delete("bot:" + id); return v.text; }
+    }
+  }
+  return null;
+}
+// True when the token matched and the answer was stored.
+async function botSet(env, id, tok, reply) {
+  if (env.BOT) return (await doCall(env, id, "reply", { tok, text: reply })).ok;
+  const v = await env.CFG.get("bot:" + id, "json").catch(() => null);
+  if (!v || v.tok !== tok || v.text) return false;
+  await env.CFG.put("bot:" + id, JSON.stringify({ tok: v.tok, text: reply }), { expirationTtl: 600 });
+  return true;
+}
+
 async function botChat(req, env, ask, all) {
   const id = hex(8), tok = hex(16);
-  await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
+  await botInit(env, id, tok);
   const auth = /^bearer\s/i.test(env.GROKBOT_AUTH) ? env.GROKBOT_AUTH : "Bearer " + env.GROKBOT_AUTH;
   // The message to the bot names where to send the answer: the relay's address when the Webhook goes out through the relay,
   // the gateway's own public address (BOT_CALLBACK_FALLBACK) when the relay is down, so an answer is never sent to a dead road.
@@ -313,13 +379,8 @@ async function botChat(req, env, ask, all) {
         ctl.close();
         return;
       }
-      const until = Date.now() + BOT_WAIT_MS;
-      while (Date.now() < until) {
-        await new Promise((r) => setTimeout(r, 1500));
-        let v = null;
-        try { v = await env.CFG.get("bot:" + id, "json"); } catch (e) { /* retry */ }
-        if (v && v.text) { say("\n" + v.text.replace(/[*#`]+/g, "")); await env.CFG.delete("bot:" + id); ctl.close(); return; }
-      }
+      const answer = await botWait(env, id, BOT_WAIT_MS);
+      if (answer) { say("\n" + answer.replace(/[*#`]+/g, "")); ctl.close(); return; }
       say("\n小黑一直没有回话，我先不等了。");
       ctl.close();
     },
@@ -334,12 +395,11 @@ async function botReply(req, env, url) {
   const seg = url.pathname.replace(/\/+$/, "").split("/").filter(Boolean).slice(1);
   const id = seg[0] || url.searchParams.get("id") || "";
   const t = seg[1] || url.searchParams.get("t") || url.searchParams.get("amp;t") || "";
-  const v = id ? await env.CFG.get("bot:" + id, "json").catch(() => null) : null;
-  if (!v || v.tok !== t || v.text) return text("forbidden", 403);
+  if (!id) return text("forbidden", 403);
   const b = await req.json().catch(() => null);
   const reply = (b && (b.text || b.reply || b.message) || "").toString().slice(0, 4000);
   if (!reply.trim()) return json({ error: "no text" }, 400);
-  await env.CFG.put("bot:" + id, JSON.stringify({ tok: v.tok, text: reply }), { expirationTtl: 600 });
+  if (!(await botSet(env, id, t, reply))) return text("forbidden", 403);
   return json({ ok: true });
 }
 

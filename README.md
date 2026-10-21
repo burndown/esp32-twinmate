@@ -62,7 +62,7 @@ Azure 的音色很多：设置页的"刷新完整列表"会用你的密钥向 Az
 
 **Cloudflare Workers AI 的识别**：用 `@cf/openai/whisper-large-v3-turbo`，按[官方定价](https://developers.cloudflare.com/workers-ai/platform/pricing/)每音频分钟 46.63 个 Neurons，免费每天 10,000 个，约 200 分钟。用同一段中文录音经真实的 Worker 测过：识别正确（简体），稳定后约 1.2 秒，冷启动那一次 5.2 秒。**不要选 `@cf/openai/whisper`（不是 turbo 版）**，同一段话它输出繁体还错了一个字。语音合成不建议用 Workers AI 的 MeloTTS：它输出 44.1 kHz 的 WAV，而固件只解 MP3，Worker 免费版的 10 毫秒 CPU 又编不了 MP3，需要固件另加 WAV 播放，目前没做。
 
-**验证状态（如实说明）**：Azure 识别经网关用一段中文录音测过，识别正确，网关本地响应 1.2 到 2.8 秒（含从 Mac 到 Azure 东亚区域的往返）。**纯云端的完整一轮已在真机上跑通**（Waveshare 1.75C，关闭模型的固件，所有请求只指向一个部署在 Cloudflare 免费账号上的 Worker，没有家里的服务器）：录音 3.1 秒，识别用 Cloudflare Whisper，松手后约 4.6 秒拿到正确文字；文字直接发给 Muse，约 0.7 秒后确认收到；Muse 的第一段文字约 +13 秒，第一声约 +17 秒（其中 Worker 取第一段语音约 3.9 秒）；一段 1469 字的回答分 11 次向 Worker 取语音（Azure 合成），念了 94 秒，整轮 112 秒，Worker 没有报超出 CPU 限制，设备内部内存最低 16K。对比家里网关：识别慢约 4 秒，合成每段慢约 1 到 2 秒。**只测了 Muse 这一个回答者**；Grok Bot 在纯云端下的回调（KV 最终一致性）没有测。
+**验证状态（如实说明）**：Azure 识别经网关用一段中文录音测过，识别正确，网关本地响应 1.2 到 2.8 秒（含从 Mac 到 Azure 东亚区域的往返）。**纯云端的完整一轮已在真机上跑通**（Waveshare 1.75C，关闭模型的固件，所有请求只指向一个部署在 Cloudflare 免费账号上的 Worker，没有家里的服务器）：录音 3.1 秒，识别用 Cloudflare Whisper，松手后约 4.6 秒拿到正确文字；文字直接发给 Muse，约 0.7 秒后确认收到；Muse 的第一段文字约 +13 秒，第一声约 +17 秒（其中 Worker 取第一段语音约 3.9 秒）；一段 1469 字的回答分 11 次向 Worker 取语音（Azure 合成），念了 94 秒，整轮 112 秒，Worker 没有报超出 CPU 限制，设备内部内存最低 16K。对比家里网关：识别慢约 4 秒，合成每段慢约 1 到 2 秒。**只测了 Muse 这一个回答者**。Grok Bot 的回调状态在 Cloudflare 上改用 Durable Object（`worker/wrangler.toml` 里的 `BOT` 绑定和迁移；免费版可用 SQLite 版的 Durable Object），没有这个绑定时退回 KV（最终一致，回答可能晚到最多一分钟，家里的网关就是这种）。这个新路径用本机 Worker 加一个假机器人测过：先说确认话，约 4.6 秒后收到回答，第二次回调返回 403（一次性令牌），错令牌返回 403；**还没有用真机器人在 Cloudflare 上测过**。Bot 的"允许访问的外部地址"里要加入你的 `*.workers.dev` 域名。
 
 ## 不在家也能用（家里网关的公网入口）
 
