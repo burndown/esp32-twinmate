@@ -368,7 +368,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..bd1665e 100644
+index 2866f5d..9100f4b 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -467,7 +467,7 @@ index 2866f5d..bd1665e 100644
  {
      if (s_turn.phase != P_IDLE) {
          if (s_turn.text) {
-@@ -1013,16 +1027,551 @@ static bool turn_start(uint32_t gen, bool text)
+@@ -1013,16 +1027,563 @@ static bool turn_start(uint32_t gen, bool text)
      s_reply_shown[0] = '\0';
      s_turn.start_us = now_us();
      resampler_init(&s_turn.up, MIC_RATE, DICT_RATE);
@@ -984,17 +984,29 @@ index 2866f5d..bd1665e 100644
 +    strlcpy(heard, s_stt.text, sizeof(heard));
 +    ESP_LOGI(TAG, "heard: \"%s\"", heard);
 +    emit(MUSE_HATCH_EV_HEARD, heard);   /* shown even if Muse can't be reached */
-+    /* Muse chosen and no model to fall back on: no need to ask the gateway first, Muse gets the text. */
-+    if ((kModel || muse_settings_away_mode() != 0) && brain_start(heard)) {
++    /* Muse chosen (Settings > Answers): the text goes straight to Muse, the gateway is not asked first. The Grok Bot and the model are
++     * asked through the gateway. */
++    auto hand_to_brain = [](const char *text, bool muse_down) -> bool {
++        if (!brain_start(text, muse_down)) {
++            return false;
++        }
 +        mark(M_SENT);
 +        emit(MUSE_HATCH_EV_SENT, nullptr);   /* the note counts as delivered: no saved copy to retry */
 +        s_turn.brain = true;
 +        s_turn.chat_posted = true;
 +        s_turn.chat_us = s_turn.last_event_us = now_us();
 +        s_turn.phase = P_WAIT_REPLY;
++        return true;
++    };
++    if (muse_settings_away_mode() != 0 && hand_to_brain(heard, false)) {
 +        return;
 +    }
 +    if (!ensure_connected()) {
++        /* Muse cannot be reached: where the model is offered it answers instead of failing the turn. */
++        if (kModel && CONFIG_MUSE_BRAIN_URL[0] && hand_to_brain(heard, true)) {
++            ESP_LOGW(TAG, "Muse unreachable: the model answers");
++            return;
++        }
 +        turn_fail(muse_hatch_configured() ? "CAN'T REACH MUSE" : "MUSE NOT SET UP");
 +        return;
 +    }
@@ -1021,7 +1033,7 @@ index 2866f5d..bd1665e 100644
          return;
      }
      if (VOICE_NOTE) {
-@@ -1224,6 +1773,35 @@ static void post_chat(const char *text)
+@@ -1224,6 +1785,35 @@ static void post_chat(const char *text)
      send_chat(text, "text");
  }
  
@@ -1057,7 +1069,7 @@ index 2866f5d..bd1665e 100644
  /* A typed turn: the text goes straight to the chat. */
  static void text_begin(const char *text)
  {
-@@ -1415,6 +1993,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
+@@ -1415,6 +2005,57 @@ static const char *msg_id(cJSON *payload, cJSON *event)
      return id && id[0] ? id : nullptr;
  }
  
@@ -1115,7 +1127,7 @@ index 2866f5d..bd1665e 100644
  static void on_event(cJSON *line)
  {
      if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
-@@ -1428,11 +2057,20 @@ static void on_event(cJSON *line)
+@@ -1428,11 +2069,20 @@ static void on_event(cJSON *line)
          }
          s_last_seq = v > s_last_seq ? v : s_last_seq;
      }
@@ -1139,7 +1151,7 @@ index 2866f5d..bd1665e 100644
  
      if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
          const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
-@@ -1508,37 +2146,248 @@ static void on_chat_ack(stream_t *s)
+@@ -1508,37 +2158,248 @@ static void on_chat_ack(stream_t *s)
  
  /* ---- Turn: speech ---- */
  
@@ -1405,7 +1417,7 @@ index 2866f5d..bd1665e 100644
          show_reply_start(m);
          return;
      }
-@@ -1598,6 +2447,39 @@ static void decode(void)
+@@ -1598,6 +2459,39 @@ static void decode(void)
          pace_silently();
          return;
      }
@@ -1445,7 +1457,7 @@ index 2866f5d..bd1665e 100644
      /*
       * minimp3 only takes a frame once it can see the next one's header. Given
       * less, it resets and says to skip all of it, which drops speech and clicks.
-@@ -1677,6 +2559,9 @@ static void check_turn(void)
+@@ -1677,6 +2571,9 @@ static void check_turn(void)
          return;
      }
      if (!s_turn.nmsgs) {
@@ -1455,7 +1467,7 @@ index 2866f5d..bd1665e 100644
          /* Wait as long as the agent says it's working; the turn cap still applies. */
          if (t - s_turn.chat_us > (text ? TEXT_REPLY_TIMEOUT_US : REPLY_TIMEOUT_US) && !s_turn.agent_busy) {
              turn_fail("NO REPLY FROM MUSE");
-@@ -1885,9 +2770,27 @@ static bool poll_socket(void)
+@@ -1885,9 +2782,27 @@ static bool poll_socket(void)
  static void drop_connection(const char *why)
  {
      bool in_turn = s_turn.phase != P_IDLE;
@@ -1484,7 +1496,7 @@ index 2866f5d..bd1665e 100644
          turn_fail("LOST CONNECTION TO MUSE");
      }
      muse_hatch_report(MUSE_HATCH_UNTESTED, "");
-@@ -1940,6 +2843,12 @@ static void handle(const cmd_t &cmd)
+@@ -1940,6 +2855,12 @@ static void handle(const cmd_t &cmd)
              turn_fail("CANCELLED");
          }
          break;
@@ -1497,7 +1509,7 @@ index 2866f5d..bd1665e 100644
      case CMD_WAKE:   /* only ends hatch_task's resting wait */
          break;
      }
-@@ -1953,7 +2862,8 @@ static void hatch_task(void *arg)
+@@ -1953,7 +2874,8 @@ static void hatch_task(void *arg)
          /* Resting, the socket's keepalive (PING_US) needs no quicker polls.
           * Resting unconnected, Wi-Fi may nap (muse_wifi_nap): wait for a
           * turn or for waking (CMD_WAKE) instead of watching it. */
@@ -1507,7 +1519,7 @@ index 2866f5d..bd1665e 100644
          TickType_t wait = wait_ms < 0 ? portMAX_DELAY : pdMS_TO_TICKS(wait_ms);
          if (xQueueReceive(s_cmds, &cmd, wait) == pdTRUE) {
              handle(cmd);
-@@ -1961,11 +2871,27 @@ static void hatch_task(void *arg)
+@@ -1961,11 +2883,27 @@ static void hatch_task(void *arg)
                  handle(cmd);
              }
          }
@@ -1536,7 +1548,7 @@ index 2866f5d..bd1665e 100644
                  if (ensure_connected()) {
                      s_auto_next_us = INT64_MAX;   /* until it drops */
                      s_auto_backoff_us = AUTO_RETRY_MIN_US;
-@@ -1989,7 +2915,7 @@ static void hatch_task(void *arg)
+@@ -1989,7 +2927,7 @@ static void hatch_task(void *arg)
          }
          bool sent = true;
          if (s_turn.phase == P_LISTEN) {
@@ -1545,7 +1557,7 @@ index 2866f5d..bd1665e 100644
          }
          if (!sent) {
              drop_connection("send failed");
-@@ -2007,7 +2933,8 @@ static void hatch_task(void *arg)
+@@ -2007,7 +2945,8 @@ static void hatch_task(void *arg)
          int64_t t = now_us();
          if (t - s_conn.last_rx_us > DEAD_US) {
              drop_connection("server went quiet");
@@ -1555,7 +1567,7 @@ index 2866f5d..bd1665e 100644
              disconnect("idle");
              muse_hatch_report(MUSE_HATCH_UNTESTED, "");
              s_auto_next_us = INT64_MAX;   /* the next turn connects */
-@@ -2114,6 +3041,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
+@@ -2114,6 +3053,16 @@ extern "C" size_t muse_hatch_turn_audio_wait(const int16_t *pcm, size_t frames,
      return xStreamBufferSend(s_in, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);
  }
  
@@ -1572,7 +1584,7 @@ index 2866f5d..bd1665e 100644
  extern "C" void muse_hatch_turn_end(void)
  {
      post(CMD_END, s_gen.load());
-@@ -2146,6 +3083,41 @@ extern "C" void muse_hatch_text_turn(char *text)
+@@ -2146,6 +3095,41 @@ extern "C" void muse_hatch_text_turn(char *text)
      }
  }
  

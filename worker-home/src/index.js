@@ -8,7 +8,6 @@ const DEFAULTS = {
           "不要使用 Markdown、列表、编号、表情符号或括号说明，因为你的话会被直接读出来。" +
           "用户用什么语言提问，你就用什么语言回答。需要最新信息时先联网搜索。",
   history_turns: 6,
-  muse_mode: false,   // true: /chat answers 503 so the firmware asks Muse itself (recognition and speech stay here)
   max_tokens: 4000,
   llm: { provider: "dashscope", model: "qwen-plus", search: true, base_url: "", extra: "" },
   tts: { provider: "cosyvoice", model: "cosyvoice-v2", voice: "longxiaochun_v2", cluster: "volcano_tts", region: "eastasia" },
@@ -253,10 +252,11 @@ async function llmStream(cfg, S, messages) {
 
 async function chat(req, env, all, ctx) {
   const { text: userText, muse_down: museDown, away, gemini } = await req.json().catch(() => ({}));
-  // Muse mode: the first ask is answered with 503 so the firmware sends the text to Muse. If Muse stays silent for 30 s
-  // the firmware asks again with muse_down:true, and then the configured model answers instead of failing the turn.
-  // gemini: the device is away and the user chose the model for that case, so neither Muse nor the bot is asked.
-  if (all.cfg.muse_mode && !museDown && !gemini) return json({ muse: true }, 503);
+  // The device decides who answers (Settings > Answers). A question with none of the flags below is meant for Muse: a device that
+  // chose Muse asks Muse itself (the newer firmware never sends it here; an older one still does), so this answers 503, "not for me".
+  // "away" sends the question to the bot; "gemini" means the model was chosen on purpose; "muse_down" is the firmware's retry after
+  // Muse could not be reached or stayed silent, and then the configured model answers instead of failing the turn.
+  if (!away && !gemini && !museDown) return json({ muse: true }, 503);
   if (!userText || typeof userText !== "string") return json({ error: "no text" }, 400);
   if (userText.length > MAX_CHAT_CHARS) return tooLarge();
   // Away from home (the firmware says so when it is not on the home Wi-Fi) every turn goes to the Grok Bot; at home
@@ -697,7 +697,7 @@ async function admin(req, env, url, all) {
   if (p === "/admin/api" && req.method === "GET") {
     const secrets = {};
     for (const n of Object.keys(SECRET_NAMES)) secrets[n] = mask(all.S[n]);
-    return json({ config: { muse_mode: !!all.cfg.muse_mode, system: all.cfg.system, history_turns: all.cfg.history_turns, max_tokens: all.cfg.max_tokens, llm: all.cfg.llm, tts: all.cfg.tts, asr: all.cfg.asr }, secrets });
+    return json({ config: { system: all.cfg.system, history_turns: all.cfg.history_turns, max_tokens: all.cfg.max_tokens, llm: all.cfg.llm, tts: all.cfg.tts, asr: all.cfg.asr }, secrets });
   }
   if (p === "/admin/api" && req.method === "POST") {
     if (!env.CFG) return json({ error: "KV not bound" }, 500);
@@ -706,7 +706,6 @@ async function admin(req, env, url, all) {
     if (body.config) {
       const c = body.config, keep = {};
       for (const k of ["system"]) if (typeof c[k] === "string") keep[k] = c[k];
-      if (typeof c.muse_mode === "boolean") keep.muse_mode = c.muse_mode;
       for (const k of ["history_turns", "max_tokens"]) if (Number.isFinite(+c[k])) keep[k] = +c[k];
       for (const k of ["llm", "tts", "asr"]) if (c[k] && typeof c[k] === "object") {
         keep[k] = {};
@@ -784,7 +783,7 @@ export default {
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
       if (url.pathname === "/wg/peers" && req.method === "GET") return text((await wgList(env, wgConf(env))).map((p) => p.cmd + "   # asked " + p.at + (p.ok ? " (approved)" : "")).join("\n") + "\n");
-      if (url.pathname === "/health") return json({ ok: true, muse_mode: !!all.cfg.muse_mode, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
+      if (url.pathname === "/health") return json({ ok: true, llm: all.cfg.llm.provider + ":" + all.cfg.llm.model, search: !!all.cfg.llm.search, tts: all.cfg.tts.provider + ":" + all.cfg.tts.voice, asr: all.cfg.asr.provider });
       if (req.method !== "POST") return text("method", 405);
       if (url.pathname === "/avatar") return await avatarGet(env);
       if (url.pathname === "/avatar/set") return await avatarSet(req, env);

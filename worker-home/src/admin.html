@@ -34,14 +34,7 @@ button:disabled{opacity:.5}
 <body>
 <div class="w">
 <h1>Muse 网关设置</h1>
-<p class="sub">圆圆每次说话都会经过这里：识别 → 大模型 → 语音合成。改完点“保存”，下一句话就生效，不用重刷固件。</p>
-
-<div class="card" id="mode_card">
-<h2>回到 Muse</h2>
-<div class="chk"><input type="checkbox" id="muse_mode"><label for="muse_mode" style="margin:0;color:inherit"><b>让对话回到 Muse 云端</b>（一键开关，下一句话生效）</label></div>
-<p class="hint" style="margin-top:8px">打开后，圆圆说的话仍然在这里被识别成文字，但<b>回答交给 Muse 自己的助手</b>，不再用下面选的大模型；你选的服务商和模型都保留着，关掉开关就切回来。<br>
-做不到的部分（固件限制）：语音识别和语音播报仍然走这里选的服务商，录音不会上传给 Muse。要连识别也交给 Muse，需要更新一次固件。</p>
-</div>
+<p class="sub">圆圆每次说话都会经过这里：识别、语音合成，以及（在设备上选了模型或机器人时）大模型和机器人。谁来回答在设备的 设置 → Answers 里选。改完点“保存”，下一句话就生效，不用重刷固件。</p>
 
 <div class="card">
 <h2>大模型</h2>
@@ -158,7 +151,6 @@ for (const id of ["llm_provider","tts_provider","asr_provider"]) $(id).addEventL
 
 function render(){
   const c = state.config;
-  $("muse_mode").checked = !!c.muse_mode;
   $("llm_provider").value = c.llm.provider; $("llm_model").value = c.llm.model; $("llm_search").checked = !!c.llm.search;
   $("llm_base_url").value = c.llm.base_url || ""; $("llm_extra").value = c.llm.extra || "";
   $("asr_provider").value = c.asr.provider; $("asr_model").value = c.asr.model || ""; $("asr_url").value = c.asr.url || "";
@@ -188,7 +180,6 @@ async function load(){
 }
 function collect(){
   const config = {
-    muse_mode: $("muse_mode").checked,
     system: $("system").value, history_turns: $("history_turns").value, max_tokens: $("max_tokens").value,
     llm: { provider: $("llm_provider").value, model: $("llm_model").value.trim(), search: $("llm_search").checked, base_url: $("llm_base_url").value.trim(), extra: $("llm_extra").value.trim() },
     asr: { provider: $("asr_provider").value, model: $("asr_model").value.trim(), url: $("asr_url").value.trim() },

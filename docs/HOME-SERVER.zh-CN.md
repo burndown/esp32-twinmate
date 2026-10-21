@@ -73,11 +73,11 @@ printf 'GATEWAY_TOKEN=%s\n' "$(openssl rand -hex 24)" > .dev.vars && chmod 600 .
 # then install home/muse-home-gateway.service (fill in YOUR_USER and YOUR_LAN_IP) as a systemd unit
 ```
 
-设置页在 `http://<内网地址>:8787/admin?k=<令牌>`，设置和密钥存在 `./state`（磁盘上的模拟 KV，明文）。为什么要有它：**云上的 Worker 对国内的服务商很慢**。实测（作者的网络，到 Cloudflare 的线路落在美国西海岸）同一句话合成云上 2.6 到 6.4 秒，家里版 0.7 到 1.3 秒；阿里云识别 2 到 4 秒对 0.5 秒；"回到 Muse"的 503 应答 0.4 秒加 TLS 握手对 15 毫秒。内网用 http，ESP32 还省掉每次请求的 TLS 握手。
+设置页在 `http://<内网地址>:8787/admin?k=<令牌>`，设置和密钥存在 `./state`（磁盘上的模拟 KV，明文）。为什么要有它：**云上的 Worker 对国内的服务商很慢**。实测（作者的网络，到 Cloudflare 的线路落在美国西海岸）同一句话合成云上 2.6 到 6.4 秒，家里版 0.7 到 1.3 秒；阿里云识别 2 到 4 秒对 0.5 秒；旧的“回到 Muse”模式下网关的 503 应答 0.4 秒加 TLS 握手对 15 毫秒（这个模式已经去掉）。内网用 http，ESP32 还省掉每次请求的 TLS 握手。
 
-## "回到 Muse"开关
+## Muse 怎么被问到
 
-设置页最上面的开关。打开后，网关对固件的第一次询问返回 503，固件就把识别出的文字交给 Muse 自己的助手回答；你选的大模型保留着，关掉开关就切回来。如果 Muse 在设定时间（`MUSE_BRAIN_GIVEUP_SECONDS`，默认 30 秒）内没有回一个字，固件会带 `muse_down: true` 再问一次，这时网关用你选的大模型回答，不让回合失败。限制：识别和播报仍走这里选的服务商，录音不会上传给 Muse。
+网关上不再有“回到 Muse”开关：谁来回答由设备决定，在设置 → Answers 里选。选 Muse 时，设备自己把识别出的文字发给 Muse，网关不参与这一问。如果 Muse 连不上，或者在设定时间（`MUSE_BRAIN_GIVEUP_SECONDS`，默认 30 秒）内一个字也没回，固件会带 `muse_down: true` 去问网关，这时网关用你选的大模型回答，不让回合失败。识别和播报始终用网关里选的服务商，录音不会上传给 Muse。（对旧固件：一个不带 `away`、`gemini`、`muse_down` 任何一个标记的问题，网关像以前一样回 `503`，意思是“这句话交给 Muse”。）
 
 ## 本地语音识别（可选）
 
