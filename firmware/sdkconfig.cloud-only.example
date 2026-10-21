@@ -2,7 +2,7 @@
 # network that blocks them. Copy this file to one you do NOT commit (it holds your gateway token), fill in the five places marked
 # with YOUR_, and add it LAST to SDKCONFIG_DEFAULTS (see the README, "Cloud-only deployment").
 
-# ---- the gateway: three addresses on the same Worker, with the gateway token (the one you open /admin?k=... with) ----
+# ---- the gateway: three addresses on the same Worker, with the DEVICE token (not the admin token you open the settings page with) ----
 CONFIG_MUSE_STT_URL="https://YOUR_WORKER.workers.dev/stt?k=YOUR_GATEWAY_TOKEN"
 CONFIG_MUSE_TTS_URL="https://YOUR_WORKER.workers.dev/tts?k=YOUR_GATEWAY_TOKEN"
 CONFIG_MUSE_BRAIN_URL="https://YOUR_WORKER.workers.dev/chat?k=YOUR_GATEWAY_TOKEN"

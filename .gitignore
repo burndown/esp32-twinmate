@@ -3,3 +3,6 @@ node_modules/
 .wrangler/
 *.defaults.local
 .dev.vars
+muse-cloud.toml
+build/
+worker/wrangler.generated.toml

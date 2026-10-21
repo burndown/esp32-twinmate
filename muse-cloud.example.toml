@@ -1,0 +1,70 @@
+# muse-cloud.toml: every setting of the gateway (Cloudflare) and of the device firmware in one file.
+#
+#   python3 tools/muse-cloud.py init       copies this file to muse-cloud.toml, with fresh random tokens
+#   (edit muse-cloud.toml)
+#   python3 tools/muse-cloud.py gateway    deploys the Worker and pushes the settings to it
+#   python3 tools/muse-cloud.py firmware   builds the firmware (add --flash PORT to flash it)
+#
+# muse-cloud.toml holds secrets (tokens, keys, the WireGuard private key). It is in .gitignore: never commit it.
+# Lines starting with # are explanations; an empty value ("") means "not used".
+
+[muse]
+# Your Muse SDK token from https://gadgets.muse.ai: "mgst_" followed by 43 more characters, 48 in all. Required.
+sdk_token = ""
+
+[gateway]
+# The Worker's name. Its address will be https://<name>.<your-account>.workers.dev (the gateway step fills `url` in).
+name = "muse-gateway"
+url = ""
+# Two different secrets. `init` makes them.
+#   device_token: goes into the firmware (so whoever holds the device holds it). Opens speech, chat, enrolment and the picture.
+#   admin_token:  only in your browser. Opens the settings page https://<url>/admin?k=<admin_token>.
+device_token = ""
+admin_token = ""
+# Filled in by the gateway step (the id of the Cloudflare KV namespace that keeps the settings).
+kv_id = ""
+
+[speech]
+# Azure Speech (a free F0 resource is enough): speech synthesis always, recognition if you choose "azure" below.
+azure_key = ""
+azure_region = "eastasia"
+voice = "zh-CN-XiaoxiaoMultilingualNeural"
+# "cloudflare": Whisper on Workers AI, free (about 200 minutes a day), no key.  "azure": Azure Speech recognition.
+recognition = "cloudflare"
+language = "zh-CN"
+
+[bot]
+# Optional: a cloud agent reached by Webhook (the "Grok Bot"). Leave empty to offer only Muse in Settings > Answers.
+# The Webhook address must be https on a public host name.
+webhook_url = ""
+auth = ""
+# Normally empty: the bot answers to your Worker's own address. Set it only when the bot must call a different address.
+callback_base = ""
+
+[wireguard]
+# Optional: a tunnel to a server of yours, for networks where Muse or Cloudflare cannot be reached (see docs/wireguard-server.md).
+enabled = false
+endpoint = ""                    # the server's host name or IP
+port = 51820
+server_public_key = ""           # /etc/wireguard/server.pub on the server
+address = "10.77.0.2"            # this device's address inside the tunnel; one per device
+subnet = "10.77.0."              # the tunnel's address prefix (for the Worker's registry)
+# off | auto | always. Auto: the tunnel only when Muse or the gateway cannot be reached; never on the home network.
+mode = "auto"
+# true: speech, recognition and chat also go through the tunnel (when you cannot reach Cloudflare either).
+via_tunnel = true
+# The firmware step makes a key pair and writes the private key here. The public key is printed with the command to run on the server.
+private_key = ""
+
+[firmware]
+# Where ESP-IDF 6.0.1 is installed.
+idf_path = "~/esp/esp-idf-v6.0.1"
+# The upstream Muse firmware this patch is made for. Do not change the commit unless you rebuild the patch.
+upstream = "https://github.com/facebookincubator/muse-gadget-sdk.git"
+upstream_commit = "fa07304"
+# Where the sources and the build go (inside this repository's folder; ignored by git).
+workdir = "build"
+# false: Settings > Answers offers only Muse and the Grok Bot, and a failure is shown as an error. true needs a language model on the gateway (worker-home).
+model_answers = false
+# The name of your home Wi-Fi. With a home server (worker-home) the firmware uses its LAN address there; leave empty for the cloud-only setup.
+home_ssid = ""
