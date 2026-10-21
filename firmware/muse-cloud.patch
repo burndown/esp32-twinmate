@@ -304,7 +304,7 @@ index b10e9d8..52ddca1 100644
   * Prints one "@chat" line per call (more if `text` is long): the type, then the
   * printf-style `fields` (JSON members, or NULL), then `text` escaped (or none).
 diff --git a/esp32/components/muse/muse_chat_session.cpp b/esp32/components/muse/muse_chat_session.cpp
-index 2866f5d..84f0647 100644
+index 2866f5d..8b58286 100644
 --- a/esp32/components/muse/muse_chat_session.cpp
 +++ b/esp32/components/muse/muse_chat_session.cpp
 @@ -56,12 +56,16 @@
@@ -847,7 +847,7 @@ index 2866f5d..84f0647 100644
 +        turn_fail("CAN'T HEAR");
 +        return true;
 +    }
-+    ESP_LOGI(TAG, "voice: %.2fs recorded, recognising on the LAN", secs);
++    ESP_LOGI(TAG, "voice: %.2fs recorded, recognising", secs);
 +    s_turn.end_sent = true;
 +    s_turn.end_sent_us = now_us();
 +    s_turn.phase = P_WAIT_FINAL;
