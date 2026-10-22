@@ -2,6 +2,8 @@
 
 [English](README.en.md) · **中文**
 
+<p align="center"><img src="docs/images/cover.webp" alt="一台小可爱，两个 AI 伙伴：Muse × Grok Bot，随心切换" width="100%"></p>
+
 本项目是 Meta [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 固件的魔改版，目前只支持**微雪 ESP32-S3-Touch-AMOLED-1.75C** 。但是我猜移植到其他 ESP32 也不难。本项目在原有基础上增加：
 
 - **先转文字，再交给回答者**：你说的话先识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再交给 Muse 或 Grok bot。我在使用的时候经常发现Muse 转译出现问题，有时候甚至会卡住，莫不如我们自己先转了，发给Muse，Azure正常的免费额度足够轻量使用了。

@@ -2,6 +2,8 @@
 
 **English** · [中文](README.md)
 
+<p align="center"><img src="docs/images/cover.webp" alt="One little cutie, two AI companions: Muse × Grok Bot, switch as you like" width="100%"></p>
+
 This project is a modified version of the firmware of Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk), for the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** round touch screen (the only board supported so far). It adds:
 
 - **Text first, then the answerer.** What you say is first recognised by your own gateway (Cloudflare Whisper or Azure Speech, your choice), and the resulting text is handed to Muse or to the Grok Bot. In my own use, Muse's transcription often went wrong and sometimes even hung, so it is better to transcribe first and send Muse the text; Azure's normal free allowance is enough for light use.
