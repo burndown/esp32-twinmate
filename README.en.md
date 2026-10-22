@@ -206,6 +206,18 @@ The Webhook URL must use HTTPS and a public hostname. This flow has been tested 
 | `[firmware]` | `idf_path`, `upstream`, `upstream_commit`, `workdir` | ESP-IDF path, upstream repository, pinned commit and build directory |
 | | `model_answers`, `home_ssid` | Keep the template defaults: `false` and an empty string |
 
+## Firmware and memory
+
+The ESP32-S3 has three kinds of storage: an external **Flash** (keeps its content when powered off, slowest), the **SRAM** inside the chip (fastest, but small) and an external **PSRAM** (larger, a bit slower). The firmware is kept in Flash; at boot the code and read-only data are copied into PSRAM and run from there, and only the interrupt handlers and critical code stay in SRAM. This is how they relate:
+
+<p align="center"><img src="docs/images/memory-relations.en.svg" alt="How Flash, SRAM and PSRAM relate" width="100%"></p>
+
+And this is how much space the firmware takes: the Flash partitions, what the 2.44 MB firmware contains, and how SRAM and PSRAM are used while it runs.
+
+<p align="center"><img src="docs/images/memory-footprint.en.svg" alt="Space used by the firmware" width="100%"></p>
+
+The figures come from a build of 2026-10-22 (after merging upstream e6fe517) and from the device's serial log; other builds differ slightly. The 32 MB of Flash was read from the board with esptool (the official specification says 16 MB), and the partition table uses only the first 9 MB or so. The 2.4 MB of code and read-only data in PSRAM is inferred. Internal SRAM is the tight spot: only about 26 KB is free while it runs, which is why large buffers such as the speech buffers live in PSRAM.
+
 ## Troubleshooting
 
 - **The device keeps restarting**: read the serial log at 115200 baud. `ESP_NETIF_BRIDGE_EN` must be enabled; the current firmware forces it on. If needed, remove the generated `build/` directory and rebuild. Do not keep your own source changes in that directory.

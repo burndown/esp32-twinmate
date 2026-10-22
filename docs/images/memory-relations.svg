@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 48 680 466" role="img">
+<title>Flash、SRAM 和 PSRAM 的关系</title>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#2c2c2a}.th{font-size:14px;font-weight:500;fill:#2c2c2a}.ts{font-size:12px;fill:#5f5e5a}
+.box{fill:#f1efe8;stroke:#888780}.dash{fill:none;stroke:#888780}
+.r-purple{fill:#eeedfe;stroke:#534ab7}.th-purple{font-size:14px;font-weight:500;fill:#3c3489}.ts-purple{font-size:12px;fill:#534ab7}
+.r-teal{fill:#e1f5ee;stroke:#0f6e56}.th-teal{font-size:14px;font-weight:500;fill:#085041}.ts-teal{font-size:12px;fill:#0f6e56}
+.r-gray{fill:#f1efe8;stroke:#5f5e5a}.th-gray{font-size:14px;font-weight:500;fill:#444441}.ts-gray{font-size:12px;fill:#5f5e5a}
+.r-amber{fill:#faeeda;stroke:#854f0b}.th-amber{font-size:14px;font-weight:500;fill:#633806}.ts-amber{font-size:12px;fill:#854f0b}
+@media (prefers-color-scheme:dark){
+.t,.th{fill:#d3d1c7}.ts{fill:#b4b2a9}.box{fill:#2c2c2a;stroke:#888780}
+.r-purple{fill:#3c3489;stroke:#afa9ec}.th-purple{fill:#cecbf6}.ts-purple{fill:#afa9ec}
+.r-teal{fill:#085041;stroke:#5dcaa5}.th-teal{fill:#9fe1cb}.ts-teal{fill:#5dcaa5}
+.r-gray{fill:#444441;stroke:#b4b2a9}.th-gray{fill:#d3d1c7}.ts-gray{fill:#b4b2a9}
+.r-amber{fill:#633806;stroke:#ef9f27}.th-amber{fill:#fac775}.ts-amber{fill:#ef9f27}}
+</style>
+<defs><marker id="mg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="mb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#378ADD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#BA7517" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect x="190" y="60" width="290" height="250" rx="12" class="dash" stroke-width="0.5" stroke-dasharray="4 4"/>
+<text class="ts" x="204" y="80">ESP32-S3 芯片内部</text>
+<rect class="r-gray" x="20" y="110" width="130" height="170" rx="8" stroke-width="0.5"/>
+<text class="th-gray" x="85" y="132" text-anchor="middle">Flash 32 MB</text>
+<text class="ts-gray" x="85" y="156" text-anchor="middle">外挂 · 最慢</text>
+<text class="ts-gray" x="85" y="176" text-anchor="middle">断电保留</text>
+<text class="ts-gray" x="85" y="202" text-anchor="middle">固件 2.44 MB</text>
+<text class="ts-gray" x="85" y="220" text-anchor="middle">头像 1 MB</text>
+<text class="ts-gray" x="85" y="238" text-anchor="middle">配置、备份槽</text>
+<rect class="box" x="210" y="95" width="250" height="40" rx="8" stroke-width="0.5"/>
+<text class="th" x="335" y="115" text-anchor="middle" dominant-baseline="central">两个 CPU 核心 · 240 MHz</text>
+<rect class="r-purple" x="205" y="190" width="130" height="100" rx="8" stroke-width="0.5"/>
+<text class="th-purple" x="270" y="212" text-anchor="middle">内部 SRAM</text>
+<text class="ts-purple" x="270" y="234" text-anchor="middle">342 KB · 最快</text>
+<text class="ts-purple" x="270" y="254" text-anchor="middle">断电丢失</text>
+<text class="ts-purple" x="270" y="274" text-anchor="middle">空闲仅约 26 KB</text>
+<rect class="r-gray" x="345" y="190" width="125" height="100" rx="8" stroke-width="0.5"/>
+<text class="th-gray" x="407" y="212" text-anchor="middle">缓存</text>
+<text class="ts-gray" x="407" y="234" text-anchor="middle">CPU 读 PSRAM</text>
+<text class="ts-gray" x="407" y="254" text-anchor="middle">都经过这里</text>
+<rect class="r-teal" x="540" y="110" width="120" height="170" rx="8" stroke-width="0.5"/>
+<text class="th-teal" x="600" y="132" text-anchor="middle">PSRAM 8 MB</text>
+<text class="ts-teal" x="600" y="156" text-anchor="middle">外挂 · 较慢</text>
+<text class="ts-teal" x="600" y="176" text-anchor="middle">断电丢失</text>
+<text class="ts-teal" x="600" y="202" text-anchor="middle">代码 2.4 MB</text>
+<text class="ts-teal" x="600" y="220" text-anchor="middle">堆已用 1.4 MB</text>
+<text class="ts-teal" x="600" y="238" text-anchor="middle">空闲 4.3 MB</text>
+<line x1="270" y1="135" x2="270" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="407" y1="135" x2="407" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="470" y1="240" x2="538" y2="240" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="150" y1="115" x2="208" y2="115" stroke="#378ADD" stroke-width="2" marker-end="url(#mb)"/>
+<line x1="150" y1="240" x2="203" y2="240" stroke="#1D9E75" stroke-width="2" marker-end="url(#mt)"/>
+<path d="M85 282V345H600V282" fill="none" stroke="#BA7517" stroke-width="2" marker-end="url(#ma)"/>
+<line x1="40" y1="392" x2="76" y2="392" stroke="#BA7517" stroke-width="2"/>
+<text class="ts" x="88" y="392" dominant-baseline="central">开机时拷贝：代码和只读数据约 2.4 MB，从 Flash 搬进 PSRAM 运行</text>
+<line x1="40" y1="414" x2="76" y2="414" stroke="#1D9E75" stroke-width="2"/>
+<text class="ts" x="88" y="414" dominant-baseline="central">开机时加载：中断、关键代码和变量约 0.17 MB，放进内部 SRAM</text>
+<line x1="40" y1="436" x2="76" y2="436" stroke="#378ADD" stroke-width="2"/>
+<text class="ts" x="88" y="436" dominant-baseline="central">运行中读写：配对信息、Wi-Fi 设置、头像，留在 Flash</text>
+<line x1="40" y1="458" x2="76" y2="458" stroke="#888780" stroke-width="2"/>
+<text class="ts" x="88" y="458" dominant-baseline="central">CPU 访问：读 SRAM 直接，读 PSRAM 要经过缓存</text>
+<text class="ts" x="40" y="498">断电后只有 Flash 保留，SRAM 和 PSRAM 清空，固件每次开机重新搬运</text>
+</svg>

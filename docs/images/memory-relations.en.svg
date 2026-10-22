@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 48 680 466" role="img">
+<title>How Flash, SRAM and PSRAM relate</title>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#2c2c2a}.th{font-size:14px;font-weight:500;fill:#2c2c2a}.ts{font-size:12px;fill:#5f5e5a}
+.box{fill:#f1efe8;stroke:#888780}.dash{fill:none;stroke:#888780}
+.r-purple{fill:#eeedfe;stroke:#534ab7}.th-purple{font-size:14px;font-weight:500;fill:#3c3489}.ts-purple{font-size:12px;fill:#534ab7}
+.r-teal{fill:#e1f5ee;stroke:#0f6e56}.th-teal{font-size:14px;font-weight:500;fill:#085041}.ts-teal{font-size:12px;fill:#0f6e56}
+.r-gray{fill:#f1efe8;stroke:#5f5e5a}.th-gray{font-size:14px;font-weight:500;fill:#444441}.ts-gray{font-size:12px;fill:#5f5e5a}
+.r-amber{fill:#faeeda;stroke:#854f0b}.th-amber{font-size:14px;font-weight:500;fill:#633806}.ts-amber{font-size:12px;fill:#854f0b}
+@media (prefers-color-scheme:dark){
+.t,.th{fill:#d3d1c7}.ts{fill:#b4b2a9}.box{fill:#2c2c2a;stroke:#888780}
+.r-purple{fill:#3c3489;stroke:#afa9ec}.th-purple{fill:#cecbf6}.ts-purple{fill:#afa9ec}
+.r-teal{fill:#085041;stroke:#5dcaa5}.th-teal{fill:#9fe1cb}.ts-teal{fill:#5dcaa5}
+.r-gray{fill:#444441;stroke:#b4b2a9}.th-gray{fill:#d3d1c7}.ts-gray{fill:#b4b2a9}
+.r-amber{fill:#633806;stroke:#ef9f27}.th-amber{fill:#fac775}.ts-amber{fill:#ef9f27}}
+</style>
+<defs><marker id="mg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="mb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#378ADD" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="mt" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#1D9E75" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="ma" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#BA7517" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect x="190" y="60" width="290" height="250" rx="12" class="dash" stroke-width="0.5" stroke-dasharray="4 4"/>
+<text class="ts" x="204" y="80">Inside the ESP32-S3</text>
+<rect class="r-gray" x="20" y="110" width="130" height="170" rx="8" stroke-width="0.5"/>
+<text class="th-gray" x="85" y="132" text-anchor="middle">Flash 32 MB</text>
+<text class="ts-gray" x="85" y="156" text-anchor="middle">External · slowest</text>
+<text class="ts-gray" x="85" y="176" text-anchor="middle">Kept when off</text>
+<text class="ts-gray" x="85" y="202" text-anchor="middle">Firmware 2.44 MB</text>
+<text class="ts-gray" x="85" y="220" text-anchor="middle">Avatar 1 MB</text>
+<text class="ts-gray" x="85" y="238" text-anchor="middle">Config, spare slot</text>
+<rect class="box" x="210" y="95" width="250" height="40" rx="8" stroke-width="0.5"/>
+<text class="th" x="335" y="115" text-anchor="middle" dominant-baseline="central">Two CPU cores · 240 MHz</text>
+<rect class="r-purple" x="205" y="190" width="130" height="100" rx="8" stroke-width="0.5"/>
+<text class="th-purple" x="270" y="212" text-anchor="middle">Internal SRAM</text>
+<text class="ts-purple" x="270" y="234" text-anchor="middle">342 KB · fastest</text>
+<text class="ts-purple" x="270" y="254" text-anchor="middle">Lost when off</text>
+<text class="ts-purple" x="270" y="274" text-anchor="middle">Only ~26 KB free</text>
+<rect class="r-gray" x="345" y="190" width="125" height="100" rx="8" stroke-width="0.5"/>
+<text class="th-gray" x="407" y="212" text-anchor="middle">Cache</text>
+<text class="ts-gray" x="407" y="234" text-anchor="middle">CPU reads of</text>
+<text class="ts-gray" x="407" y="254" text-anchor="middle">PSRAM pass here</text>
+<rect class="r-teal" x="540" y="110" width="120" height="170" rx="8" stroke-width="0.5"/>
+<text class="th-teal" x="600" y="132" text-anchor="middle">PSRAM 8 MB</text>
+<text class="ts-teal" x="600" y="156" text-anchor="middle">External · slower</text>
+<text class="ts-teal" x="600" y="176" text-anchor="middle">Lost when off</text>
+<text class="ts-teal" x="600" y="202" text-anchor="middle">Code 2.4 MB</text>
+<text class="ts-teal" x="600" y="220" text-anchor="middle">Heap used 1.4 MB</text>
+<text class="ts-teal" x="600" y="238" text-anchor="middle">Free 4.3 MB</text>
+<line x1="270" y1="135" x2="270" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="407" y1="135" x2="407" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="470" y1="240" x2="538" y2="240" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
+<line x1="150" y1="115" x2="208" y2="115" stroke="#378ADD" stroke-width="2" marker-end="url(#mb)"/>
+<line x1="150" y1="240" x2="203" y2="240" stroke="#1D9E75" stroke-width="2" marker-end="url(#mt)"/>
+<path d="M85 282V345H600V282" fill="none" stroke="#BA7517" stroke-width="2" marker-end="url(#ma)"/>
+<line x1="40" y1="392" x2="76" y2="392" stroke="#BA7517" stroke-width="2"/>
+<text class="ts" x="88" y="392" dominant-baseline="central">At boot: code and read-only data (about 2.4 MB) copied from Flash to PSRAM</text>
+<line x1="40" y1="414" x2="76" y2="414" stroke="#1D9E75" stroke-width="2"/>
+<text class="ts" x="88" y="414" dominant-baseline="central">At boot: interrupts, critical code and variables (about 0.17 MB) loaded into SRAM</text>
+<line x1="40" y1="436" x2="76" y2="436" stroke="#378ADD" stroke-width="2"/>
+<text class="ts" x="88" y="436" dominant-baseline="central">While running: pairing, Wi-Fi settings and the avatar are read and written in Flash</text>
+<line x1="40" y1="458" x2="76" y2="458" stroke="#888780" stroke-width="2"/>
+<text class="ts" x="88" y="458" dominant-baseline="central">CPU access: SRAM directly, PSRAM through the cache</text>
+<text class="ts" x="40" y="498">After power-off only Flash keeps its content; SRAM and PSRAM start empty at every boot</text>
+</svg>

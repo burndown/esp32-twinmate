@@ -231,6 +231,18 @@ Webhook 地址必须使用 HTTPS，且主机名为公网域名。该流程已通
 
 
 
+## 固件与存储空间
+
+ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯片内部的 **SRAM**（最快，但小）和外挂的 **PSRAM**（大一些，稍慢）。固件平时放在 Flash 里；开机时代码和只读数据被拷进 PSRAM 运行，只有中断和关键代码留在 SRAM。下图是它们之间的关系：
+
+<p align="center"><img src="docs/images/memory-relations.svg" alt="Flash、SRAM 和 PSRAM 的关系" width="100%"></p>
+
+下图是固件现在占用的空间：Flash 的分区、2.44 MB 固件里各部分的体积，以及运行时 SRAM 和 PSRAM 的使用情况。
+
+<p align="center"><img src="docs/images/memory-footprint.svg" alt="固件占用的空间" width="100%"></p>
+
+数据来自 2026-10-22 的一次编译（合并上游 e6fe517 之后）和圆圆的串口日志，不同版本会有小幅出入。Flash 的容量是用 esptool 在板子上读出的 32 MB（官方标称 16 MB），分区表只用了前 9 MB 左右。PSRAM 里代码和只读数据的 2.4 MB 是推算值。最紧张的是内部 SRAM：运行时空闲只有约 26 KB，所以语音缓冲这类大块内存要放在 PSRAM。
+
 ## 常见问题
 
 - **设备反复重启**：查看串口日志（115200 波特率）。编译配置必须启用 `ESP_NETIF_BRIDGE_EN`，当前固件已强制启用。必要时清理生成的 `build/` 目录后重新编译；不要在此目录中保存自己的源码修改。

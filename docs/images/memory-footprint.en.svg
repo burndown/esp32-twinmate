@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 744" role="img">
+<title>Space used by the firmware</title>
+<style>
+svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
+.t{font-size:14px;fill:#2c2c2a}.th{font-size:14px;font-weight:500;fill:#2c2c2a}.ts{font-size:12px;fill:#5f5e5a}
+.box{fill:#f1efe8;stroke:#888780}.dash{fill:none;stroke:#888780}
+.r-purple{fill:#eeedfe;stroke:#534ab7}.th-purple{font-size:14px;font-weight:500;fill:#3c3489}.ts-purple{font-size:12px;fill:#534ab7}
+.r-teal{fill:#e1f5ee;stroke:#0f6e56}.th-teal{font-size:14px;font-weight:500;fill:#085041}.ts-teal{font-size:12px;fill:#0f6e56}
+.r-gray{fill:#f1efe8;stroke:#5f5e5a}.th-gray{font-size:14px;font-weight:500;fill:#444441}.ts-gray{font-size:12px;fill:#5f5e5a}
+.r-amber{fill:#faeeda;stroke:#854f0b}.th-amber{font-size:14px;font-weight:500;fill:#633806}.ts-amber{font-size:12px;fill:#854f0b}
+@media (prefers-color-scheme:dark){
+.t,.th{fill:#d3d1c7}.ts{fill:#b4b2a9}.box{fill:#2c2c2a;stroke:#888780}
+.r-purple{fill:#3c3489;stroke:#afa9ec}.th-purple{fill:#cecbf6}.ts-purple{fill:#afa9ec}
+.r-teal{fill:#085041;stroke:#5dcaa5}.th-teal{fill:#9fe1cb}.ts-teal{fill:#5dcaa5}
+.r-gray{fill:#444441;stroke:#b4b2a9}.th-gray{fill:#d3d1c7}.ts-gray{fill:#b4b2a9}
+.r-amber{fill:#633806;stroke:#ef9f27}.th-amber{fill:#fac775}.ts-amber{fill:#ef9f27}}
+</style>
+<text class="th" x="40" y="30">The firmware on the ESP32-S3</text>
+<text class="ts" x="40" y="50">Dual core 240 MHz · Wi-Fi + Bluetooth 5 LE · Flash 32 MB (measured) · PSRAM 8 MB</text>
+<text class="th" x="40" y="86">Flash 32 MB (to scale)</text>
+<rect class="r-gray" x="40" y="98" width="3" height="34" stroke-width="0.5"/>
+<rect class="r-purple" x="43" y="98" width="46" height="34" stroke-width="0.5"/>
+<rect class="box" x="89" y="98" width="29" height="34" stroke-width="0.5" stroke-dasharray="3 3"/>
+<rect class="box" x="118" y="98" width="75" height="34" stroke-width="0.5" stroke-dasharray="3 3"/>
+<rect class="r-teal" x="193" y="98" width="19" height="34" stroke-width="0.5"/>
+<rect class="box" x="212" y="98" width="428" height="34" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text class="ts" x="426" y="115" text-anchor="middle" dominant-baseline="central">Unused 22.9 MB</text>
+<rect class="r-purple" x="40" y="154" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="60" y="160" dominant-baseline="central">Firmware slot ota_0, 4 MB: 2.44 MB used (61%), 1.56 MB left</text>
+<rect class="box" x="40" y="176" width="12" height="12" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text class="ts" x="60" y="182" dominant-baseline="central">Spare slot ota_1, 4 MB: empty, kept for over-the-air updates</text>
+<rect class="r-teal" x="40" y="198" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="60" y="204" dominant-baseline="central">Avatar partition, 1 MB: holds your own picture</text>
+<rect class="r-gray" x="40" y="220" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="60" y="226" dominant-baseline="central">Bootloader, partition table, settings (NVS) and other small partitions, about 0.2 MB in all</text>
+<text class="th" x="40" y="276">What is inside the 2.44 MB (by size)</text>
+<text class="ts" x="40" y="302" dominant-baseline="central">Muse UI and conversation</text>
+<rect class="r-purple" x="240" y="293" width="252" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="500" y="302" dominant-baseline="central">559 KB</text>
+<text class="ts" x="40" y="330" dominant-baseline="central">LVGL graphics library</text>
+<rect class="r-teal" x="240" y="321" width="193" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="441" y="330" dominant-baseline="central">429 KB</text>
+<text class="ts" x="40" y="358" dominant-baseline="central">Serial log text</text>
+<rect class="r-gray" x="240" y="349" width="84" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="332" y="358" dominant-baseline="central">187 KB</text>
+<text class="ts" x="40" y="386" dominant-baseline="central">Wi-Fi stack</text>
+<rect class="r-gray" x="240" y="377" width="123" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="371" y="386" dominant-baseline="central">273 KB</text>
+<text class="ts" x="40" y="414" dominant-baseline="central">Bluetooth stack</text>
+<rect class="r-gray" x="240" y="405" width="76" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="324" y="414" dominant-baseline="central">170 KB</text>
+<text class="ts" x="40" y="442" dominant-baseline="central">TCP/IP (lwIP)</text>
+<rect class="r-gray" x="240" y="433" width="47" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="295" y="442" dominant-baseline="central">105 KB</text>
+<text class="ts" x="40" y="470" dominant-baseline="central">TLS and crypto</text>
+<rect class="r-gray" x="240" y="461" width="67" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="315" y="470" dominant-baseline="central">148 KB</text>
+<text class="ts" x="40" y="498" dominant-baseline="central">Other (WireGuard, MP3, drivers)</text>
+<rect class="r-gray" x="240" y="489" width="301" height="18" rx="4" stroke-width="0.5"/>
+<text class="ts" x="549" y="498" dominant-baseline="central">669 KB</text>
+<rect class="r-purple" x="40" y="522" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="60" y="528" dominant-baseline="central">Our code</text>
+<rect class="r-teal" x="150" y="522" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="170" y="528" dominant-baseline="central">Graphics library</text>
+<rect class="r-gray" x="290" y="522" width="12" height="12" stroke-width="0.5"/>
+<text class="ts" x="310" y="528" dominant-baseline="central">System and third-party</text>
+<text class="th" x="40" y="574">Memory while running</text>
+<text class="ts" x="40" y="598">Internal SRAM, about 342 KB usable (fast, but small)</text>
+<rect class="r-purple" x="40" y="608" width="300" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-purple" x="190" y="622" text-anchor="middle" dominant-baseline="central">Static use 171 KB (50%)</text>
+<rect class="r-amber" x="340" y="608" width="300" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-amber" x="490" y="622" text-anchor="middle" dominant-baseline="central">Dynamic; ~26 KB free, low of 12 KB</text>
+<text class="ts" x="40" y="664">PSRAM 8 MB (external, larger, a bit slower)</text>
+<rect class="r-purple" x="40" y="674" width="177" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-purple" x="128" y="688" text-anchor="middle" dominant-baseline="central">Code + read-only ≈2.4 MB</text>
+<rect class="r-teal" x="217" y="674" width="104" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-teal" x="269" y="688" text-anchor="middle" dominant-baseline="central">Used 1.4 MB</text>
+<rect class="box" x="321" y="674" width="316" height="28" rx="4" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text class="ts" x="479" y="688" text-anchor="middle" dominant-baseline="central">Free 4.3 MB (about 3.4 MB in a conversation)</text>
+<text class="ts" x="40" y="722">The 2.4 MB is inferred: 8 MB minus the 5.73 MB heap pool</text>
+</svg>
