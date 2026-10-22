@@ -15,7 +15,7 @@ sdk_token = ""
 [gateway]
 # The Worker's name. Its address will be https://<name>.<your-account>.workers.dev (the gateway step fills `url` in).
 name = "muse-gateway"
-url = ""
+url = ""        # leave empty: the gateway step fills it in from what Cloudflare reports
 # Two different secrets. `init` makes them.
 #   device_token: goes into the firmware (so whoever holds the device holds it). Opens speech, chat, enrolment and the picture.
 #   admin_token:  only in your browser. Opens the settings page https://<url>/admin?k=<admin_token>.

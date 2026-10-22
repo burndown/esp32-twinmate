@@ -2,16 +2,20 @@
 
 [English](README.md) · **中文**
 
-本项目是 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 固件的修改版，面向 **Waveshare ESP32-S3-Touch-AMOLED-1.75C** 圆形触摸屏（目前只适配这一块板子）。在原有基础上增加：
+本项目是 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 固件的魔改版，目前只支持**微雪 ESP32-S3-Touch-AMOLED-1.75C** 。但是我猜移植到其他 ESP32也不难。本项目在原有基础上增加：
 
-- **先转文字，再交给回答者**：你说的话先由你自己的网关识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再把文字交给 Muse 或机器人。
-- **自定义 Webhook 机器人**：在设备的 **Answers** 菜单里切换 Muse 和机器人。菜单里叫 Grok Bot，但任何能接收 HTTPS Webhook、并通过回调送回答案的机器人都可以，不一定要用 Grok 模型。
+- **先转文字，再交给回答者**：你说的话先先识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再交给 Muse 或Grok bot。我在使用的时候经常发现Muse转译出现问题，有时候甚至会卡住，莫不如我们自己先转了，发给Muse，Azure正常的免费额度足够轻量使用了。
+- **Grok Bot**：在设备的 **Answers** 菜单里切换 Muse 和Grok Bot。
 - **语音播报**：回复由 Azure Speech 合成语音，在设备上播放。个人使用通常在免费额度内，具体以服务商当前的条款为准。
 - **Muse 把文字发到屏幕上**：原版固件里 Muse 只能发图片。本项目还支持接收文字：`display.show_text` 命令把文字显示成滚动的提词器并可朗读，Muse 主动发来的消息也可以被念出来（“所有消息”）。
-- **WireGuard（可选）**：所在网络无法直连 Muse 时，设备通过你自己的 Linux 服务器隧道连接。
-- **Cloudflare 网关**：部署在你自己的账号下，设置页管理识别、合成、机器人和 WireGuard，设备令牌与管理令牌分开。
-- **头像与交互**：会眨眼、随手指和板子倾斜转动的眼睛，可更换的头像（包括你自己的图片），等待计时圈，以及状态图标碰一下才出现的干净主屏。
-- **一个配置文件、三条命令**即可部署网关、编译并刷写固件。全部功能（包括稳定性修复）见 [固件说明](docs/FIRMWARE.zh-CN.md)。
+- **WireGuard（可选）**：所在网络无法直连 Muse 时，设备通过你自己的 Linux 服务器隧道连接。适合不在家无法分流，使用公共Wi-Fi或者手机热点的时候使用。
+- **Cloudflare 网关**：一个管理网关，管理上边提到的语音转换/播报，Grokbot参数，以及WireGuard。推荐部署在Cloudflare上，免费额度够用。
+- **头像与交互**：可更换的头像（包括你自己的图片）。
+- **一个配置文件、三条命令**：即可部署网关、编译并刷写固件。全部功能（包括稳定性修复）见 [固件说明](docs/FIRMWARE.zh-CN.md)。
+
+
+
+## 免责声明
 
 本项目建立在他人工作的基础上：Meta 的固件（Apache-2.0）、改编自 [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot)（MIT）的眼睛，以及改编自 [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk) 的“所有消息”。详见文末的“安全与许可”。
 
@@ -19,7 +23,11 @@
 
 ## 工作方式
 
-每一句话都先转成文字：设备把录音交给网关识别，网关把文字返回给设备。设备再把这段文字交给 **Answers** 里选定的回答来源：选 Muse 时，设备直接把文字发给 Muse；选 Webhook 机器人时，文字经网关转给机器人，机器人通过回调把答案送回网关。回复文字再由网关一句一句合成语音，在设备上播放。
+一个简短的工作流程：
+
+每一句话都先转成文字，设备把录音交给Azuer（或者Cloudflare，下文就只写一个）识别，Azure把文字返回给设备。设备再把这段文字交给设备里设置页面**Answers** 里选定的回答来源：选 Muse 时，设备直接把文字发给 Muse；选 Grok bot时，文字经网关转给Grok bot，Grok Bot通过回调把答案送回Cloudflare网关。回复文字再由Cloudflare网关送去Azure一句一句合成语音，在设备上播放。
+
+流程图：
 
 ```mermaid
 sequenceDiagram
@@ -53,23 +61,28 @@ sequenceDiagram
   end
 ```
 
-WireGuard 是可选的网络通路，不改变上述回答来源或处理流程。
+WireGuard 是在网络不可达是备选通道，不改变上述回答来源或处理流程。
 
 ## 开始前准备
 
 | 项目 | 要求 |
 |---|---|
 | 开发板 | Waveshare ESP32-S3-Touch-AMOLED-1.75C，以及一根 USB-C **数据线** |
-| Muse | Muse 账号及 [SDK token](https://gadgets.muse.ai) |
+| Muse/Grok bot | Muse 账号及 [SDK token](https://gadgets.muse.ai) / Grok Bot 账号 |
 | Cloudflare | 用于部署网关的账号，可从免费方案开始 |
 | Azure | 一个 [Azure Speech](https://portal.azure.com) 资源的密钥和区域名，例如 `eastasia`；可选择 Free F0 定价层 |
 | 电脑 | macOS 或 Linux；Python 3.8+、Node.js、git、[ESP-IDF 6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) |
-| Webhook 机器人 | 可选。能接收 HTTPS Webhook，并通过 HTTPS 请求回传答案的机器人 |
 | WireGuard 服务器 | 可选。仅在无法直连 Muse 或 Cloudflare 时需要，配置见 [服务器说明](docs/wireguard-server.zh-CN.md) |
 
-Muse token 在 [gadgets.muse.ai](https://gadgets.muse.ai) 登录并接受条款后获取。Cloudflare 的登录、KV 创建和 Worker 部署由下文脚本完成。Azure Speech 资源创建后，在 **Keys and Endpoint** 中复制密钥；配置中填写区域名，如 `eastasia`，不要填写端点网址。各平台页面和免费额度可能调整，请以官方网站为准。
+备注：
 
-ESP-IDF 请按乐鑫入门指南安装 **6.0.1** 版，其他版本尚未验证。脚本默认路径为 `~/esp/esp-idf-v6.0.1`，安装在其他位置时修改配置中的 `idf_path`。
+- Muse token 在 [gadgets.muse.ai](https://gadgets.muse.ai) 登录并接受条款后获取。
+- Grok bot 的调用方式可以让Grok bot直接帮你生成
+- Cloudflare 的登录、KV 创建和 Worker 部署由下文脚本完成。
+- Azure Speech 资源创建后，在 **Keys and Endpoint** 中复制密钥；配置中填写区域名，如 `eastasia`，不要填写端点网址。各平台页面和免费额度可能调整，请以官方网站为准。
+- ESP-IDF 请按乐鑫入门指南安装 **6.0.1** 版，其他版本尚未验证。脚本默认路径为 `~/esp/esp-idf-v6.0.1`，安装在其他位置时修改配置中的 `idf_path`。
+
+
 
 ## 快速开始
 
@@ -98,10 +111,13 @@ python3 tools/muse-cloud.py init
 | 配置项 | 内容 |
 |---|---|
 | `[muse] sdk_token` | 你的 Muse SDK token |
+| `[bot] webhook_url` | 你的Grok bot webhook url |
+| `[bot] auth` | 你的Grok bot auth，以`crsr_` 开头 |
 | `[speech] azure_key`、`azure_region` | Azure Speech 密钥和区域名 |
 | `[speech] recognition` | 默认 `"cloudflare"`，无需另填识别密钥；也可选择 `"azure"` |
+| `[gateway] name` | 给这个Cloudflare 网关起个名字 |
 
-如需自定义机器人，填写 `[bot]` 的 Webhook 地址和授权凭据。如需 WireGuard，将 `[wireguard] enabled` 设为 `true`，填写服务器地址、端口和公钥。其他配置保留模板默认值。
+如需 WireGuard，将 `[wireguard] enabled` 设为 `true`，填写服务器地址、端口和公钥。其他配置保留模板默认值。
 
 ```bash
 python3 tools/muse-cloud.py check
@@ -115,19 +131,42 @@ python3 tools/muse-cloud.py check
 python3 tools/muse-cloud.py gateway
 ```
 
-脚本会打开浏览器登录 Cloudflare，创建用于保存设置的 KV，配置访问令牌，部署带 Workers AI 和 Durable Object 绑定的 Worker，再上传 Azure、机器人和 WireGuard 设置。完成后会打印 Worker 地址，并写入 `muse-cloud.toml`。该命令可重复运行。
+脚本会打开浏览器登录 Cloudflare，创建用于保存设置的 KV，配置访问令牌，部署带 Workers AI 和 Durable Object 绑定的 Worker，再上传 Azure、机器人和 WireGuard 设置。完成后会打印 Worker 地址，并写入 `muse-cloud.toml`。该命令可重复运行。`[gateway] url` 请留空：脚本会按 Cloudflare 返回的地址填写，并且以它为准，手填的值会被覆盖。
 
-管理页面：`https://<你的worker>.workers.dev/admin?k=<管理令牌>`。可在页面中测试各项配置，或运行 `python3 tools/muse-cloud.py status` 检查网关状态。
+**在没有浏览器的机器上**（例如远程服务器），`wrangler login` 无法使用，改用 Cloudflare API 令牌：
+
+1. 在 Cloudflare 控制台打开 My Profile > API Tokens，创建一个令牌，权限为 **Workers Scripts: Edit**、**Workers KV Storage: Edit** 和 **Account Settings: Read**。如果设置了 *Client IP Address Filtering*，里面必须包含这台机器在 Cloudflare 看到的地址（用 `curl https://www.cloudflare.com/cdn-cgi/trace` 查看），否则 Cloudflare 会返回错误 9109。
+2. 令牌请自己在终端里输入，避免留在命令历史或聊天记录里：
+
+```bash
+read -s CLOUDFLARE_API_TOKEN; export CLOUDFLARE_API_TOKEN
+export CLOUDFLARE_ACCOUNT_ID=<32 位账户 ID>
+```
+
+账户 ID 是控制台地址 `dash.cloudflare.com/<账户 ID>/...` 里那串 32 位字符，Workers & Pages 概览页上也有。它不是账户名，也不是登录邮箱。设置了令牌后，脚本会跳过登录。
+
+管理页面：`https://<你的worker>.workers.dev/admin?k=<管理令牌>`。可在页面中测试各项配置，或运行 `python3 tools/muse-cloud.py status` 检查网关状态。这里也可以对各项配置再做一次更改。
 
 ### 4. 编译并刷写固件
+
+先查看串口并记下来：
+
+```bash
+python3 tools/muse-cloud.py ports
+```
+
+它会列出找到的串口（macOS 是 `/dev/cu.usbmodem*`，Linux 是 `/dev/serial/by-id/*` 和 `/dev/ttyACM*`）。在 Linux 上，如果你的账号没有权限打开串口，它会在同一行提示：把自己加入 `dialout` 组（`sudo usermod -aG dialout $USER`），重新登录后生效。如果什么都没列出，请换一根能传数据的 USB 线。`by-id` 名称在接入其他板子时不会变化，Linux 上优先使用它。
 
 ```bash
 python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101
 ```
 
-将串口路径替换为自己设备的路径。脚本会获取指定版本的上游源码、应用补丁、生成编译配置，然后通过 ESP-IDF 编译并刷写固件。不加 `--flash` 时只编译。首次编译需要下载组件，耗时取决于网络和电脑性能。
+将串口路径替换为刚才记下的路径。如果该串口不存在，脚本会在漫长的编译开始之前就停下。脚本会获取指定版本的上游源码、应用补丁、生成编译配置，然后通过 ESP-IDF 编译并刷写固件。不加 `--flash` 时只编译。首次编译需要下载组件，耗时取决于网络和电脑性能。
 
-启用 WireGuard 后，脚本会在尚无设备密钥时生成密钥对，并打印服务器端的 `wg set` 命令。**在设备首次启动前**，先在 WireGuard 服务器上执行该命令，并按提示将设备配置保存到 `wg0.conf`，以便服务器重启后仍然有效。
+> [!IMPORTANT]
+>
+> 如果配置文件里 WireGuard 段落设置为 True，脚本会在尚无设备密钥时生成密钥对，并打印服务器端的 `wg set` 命令。**在设备首次启动前**，先在 WireGuard 服务器上执行该命令，并按提示将设备配置保存到 `wg0.conf`，以便服务器重启后仍然有效。
+>
 
 若 esptool 无法连接，按住 **BOOT**、按一下 **RST**，再松开 **BOOT**，进入下载模式后重新执行命令。首次刷写需要同时写入引导程序、分区表和应用，脚本已包含这些操作。
 
@@ -138,6 +177,8 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101
 3. 如果无法配对或需要重新配对，按上游固件文档中的方法长按复位键；日志提示为 `long-press reset to pair again`。
 
 配对流程已在擦除全部闪存的现有开发板上验证，尚未在全新出厂的开发板上验证。
+
+
 
 ## 在设备上使用
 
@@ -150,7 +191,7 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101
 
 网关的固定提示语目前为中文，配置文件和命令行工具使用英文。修改提示语的方法见 [网关说明](docs/GATEWAY.zh-CN.md)。
 
-## 接入自定义 Webhook 机器人
+## 接入自定义 Webhook 机器人（Grok Bot）
 
 设备菜单将这一回答来源称为 **Grok Bot**。任何符合以下回调协议的机器人都可接入，不要求使用特定模型。
 
@@ -187,6 +228,8 @@ Webhook 地址必须使用 HTTPS，且主机名为公网域名。该流程已通
 - **恢复闪存备份后出现 `HTTP 401`**：重新配对会使旧配对令牌失效。之后再恢复旧 NVS 备份，设备会使用失效令牌并被 Muse 拒绝。不要依靠旧闪存备份恢复配对。
 - **SDK token 无效**：token 必须为 48 个字符，以 `mgst_` 开头，最后一个字符为 `A E I M Q U Y c g k o s w 0 4 8` 之一。请从 [gadgets.muse.ai](https://gadgets.muse.ai) 重新复制，并运行 `check`。
 - **部署时报 Cloudflare 1010 或无法连接**：部分网络访问 `workers.dev` 不稳定，可重新运行部署命令。
+- **`check` 通过，但 `gateway` 马上失败**：看报错信息。`[gateway] name` 为空、账户 ID 填错是最常见的原因。
+- **Cloudflare 错误 9109 “Cannot use the access token from location”**：API 令牌设置了 IP 地址限制，其中不含这台机器。把 `curl https://www.cloudflare.com/cdn-cgi/trace` 显示的地址加进去，或取消该限制。
 - **机器人一直未回复**：先检查 Webhook 地址、授权凭据，以及机器人是否获准访问回调所用的 Worker 域名。
 
 ## 费用与验证状态

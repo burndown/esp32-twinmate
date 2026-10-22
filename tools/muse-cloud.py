@@ -7,11 +7,13 @@
   muse-cloud.py firmware [--flash PORT] [--no-build]
                                           get the upstream firmware, apply the patch, write the build settings, build (and flash)
   muse-cloud.py status                    ask the deployed gateway how it is doing
+  muse-cloud.py ports                     list the serial ports (find the board before flashing)
 
 Needs Python 3.8+. The gateway step needs Node.js (it runs `npx wrangler`) and a Cloudflare account; the firmware step needs git and
 ESP-IDF 6.0.1. Nothing else is installed. muse-cloud.toml holds secrets: it is created with permissions 600 and ignored by git.
 """
-import argparse, base64, importlib.util, json, os, re, secrets, shlex, stat, subprocess, sys, tempfile, time
+import argparse
+import glob, base64, importlib.util, json, os, re, secrets, shlex, stat, subprocess, sys, tempfile, time
 try:
     import tomllib
 except ModuleNotFoundError:   # Python before 3.11: muse-cloud.toml only uses [sections], key = "text" / number / true / false, and comments
@@ -134,9 +136,11 @@ def cmd_init(a):
     print("Next: open it, fill in [muse] sdk_token and [speech] azure_key, then run:  python3 tools/muse-cloud.py gateway")
 
 
-def problems(cfg, for_gateway, for_firmware):
+def problems(cfg, for_gateway, for_firmware, url_required=True):
     p = []
     g = cfg.get("gateway", {})
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,28}[a-z0-9]", g.get("name", "")):
+        p.append('[gateway] name must be 3 to 30 characters: lowercase letters, digits and hyphens (for example "muse-gateway")')
     if not g.get("device_token") or not g.get("admin_token"):
         p.append("[gateway] device_token / admin_token are empty (run init, or put two long random strings)")
     elif g["device_token"] == g["admin_token"]:
@@ -158,7 +162,7 @@ def problems(cfg, for_gateway, for_firmware):
         tok = get(cfg, "muse", "sdk_token")
         if len(tok) != 48 or not re.fullmatch(r"mgst_[A-Za-z0-9_-]*[AEIMQUYcgkosw048]", tok):   # the SDK's own rule (cmake/validate_config.cmake)
             p.append('[muse] sdk_token is not a valid SDK token: it is 48 characters, "mgst_" and then 43 more (copy it again from https://gadgets.muse.ai)')
-        if not g.get("url"):
+        if url_required and not g.get("url"):
             p.append("[gateway] url is empty: run the gateway step first")
     w = cfg.get("wireguard", {})
     if w.get("enabled"):
@@ -172,10 +176,12 @@ def problems(cfg, for_gateway, for_firmware):
 
 def cmd_check(a):
     cfg = load()
-    p = problems(cfg, True, True)
+    p = problems(cfg, True, True, url_required=False)
     for line in p:
         print("-", line)
     print("everything needed is there." if not p else "\n%d thing(s) to fix." % len(p))
+    if not p and not cfg["gateway"].get("url"):
+        print("next: python3 tools/muse-cloud.py gateway   (it fills in [gateway] url; leave that line empty)")
     return 1 if p else 0
 
 
@@ -212,7 +218,7 @@ def cmd_gateway(a):
     g = cfg["gateway"]
     worker = os.path.join(ROOT, "worker")
     gen = os.path.join(worker, "wrangler.generated.toml")
-    plan = ["log in to Cloudflare (a browser window may open)",
+    plan = ["log in to Cloudflare (a browser window may open; with CLOUDFLARE_API_TOKEN set there is no login)",
             "create a KV namespace for the settings" if not g.get("kv_id") else "reuse the KV namespace " + g["kv_id"],
             "write worker/wrangler.generated.toml for the Worker '%s'" % g["name"],
             "set the Worker secrets GATEWAY_TOKEN and ADMIN_TOKEN", "deploy the Worker (with its Workers AI and Durable Object bindings)",
@@ -222,8 +228,17 @@ def cmd_gateway(a):
         for i, s in enumerate(plan, 1):
             print(" %d. %s" % (i, s))
         return 0
+    acct, token = os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""), os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    if acct and not re.fullmatch(r"[0-9a-f]{32}", acct):
+        sys.exit("CLOUDFLARE_ACCOUNT_ID must be the 32-character account ID (dash.cloudflare.com/<this>/..., or Workers & Pages > Overview), "
+                 "not the account name or the e-mail address")
     who = wrangler(["whoami"], worker, check=False, quiet=True)
     if "You are not authenticated" in who.stdout + who.stderr or who.returncode != 0:
+        if token:
+            # a machine without a browser: wrangler login cannot work, and it refuses to run while the token is set
+            sys.exit("Cloudflare refused CLOUDFLARE_API_TOKEN. Check: the token's permissions (Workers Scripts Write, Workers KV Storage Write, "
+                     "Account Settings Read), its Client IP Address Filtering (error 9109 means this machine's address is not allowed), "
+                     "and CLOUDFLARE_ACCOUNT_ID.\n" + (who.stdout + who.stderr).strip()[-400:])
         print("logging in to Cloudflare ...")
         subprocess.run(["npx", "--yes", "wrangler", "login"], cwd=worker, check=True)
     kv_id = g.get("kv_id", "")
@@ -247,9 +262,11 @@ def cmd_gateway(a):
     r = wrangler(["deploy", "-c", "wrangler.generated.toml"], worker, quiet=True)
     print(r.stdout.rstrip()[-600:])
     m = re.search(r"https://[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev", r.stdout + r.stderr)
-    url = g.get("url") or (m.group(0) if m else "")
+    url = m.group(0) if m else g.get("url", "")   # the address wrangler printed wins over a hand-typed one
     if not url:
         sys.exit("deployed, but the Worker's address was not in wrangler's output: put it in [gateway] url and run this step again")
+    if g.get("url") and url != g["url"]:
+        print("note: [gateway] url said %s, but the Worker is at %s; using that" % (g["url"], url))
     if url != g.get("url"):
         set_value("gateway", "url", url)
     push_settings(cfg, url)
@@ -291,6 +308,26 @@ def cmd_status(a):
 
 # ---------- the firmware ----------
 
+def serial_ports():
+    pats = ["/dev/serial/by-id/*", "/dev/ttyACM*", "/dev/ttyUSB*", "/dev/cu.usbmodem*", "/dev/cu.usbserial*"]
+    found = []
+    for pat in pats:
+        found += sorted(glob.glob(pat))
+    return found
+
+
+def cmd_ports(a):
+    ports = serial_ports()
+    if not ports:
+        print("no serial port found: plug the board in with a USB cable that carries data (hold BOOT while plugging in if it still does not show)")
+        return 1
+    for pt in ports:
+        extra = "" if os.access(pt, os.R_OK | os.W_OK) else "   (no permission: on Linux add yourself to the dialout group, then log in again)"
+        print(pt + (" -> " + os.path.realpath(pt) if os.path.islink(pt) else "") + extra)
+    print("use one of these in:  python3 tools/muse-cloud.py firmware --flash <port>   (the /dev/serial/by-id name stays the same when you plug in other boards)")
+    return 0
+
+
 def load_wg_module():
     spec = importlib.util.spec_from_file_location("make_wg_config", os.path.join(ROOT, "tools", "make-wg-config.py"))
     mod = importlib.util.module_from_spec(spec)
@@ -328,6 +365,11 @@ def cmd_firmware(a):
     if p:
         sys.exit("muse-cloud.toml is not ready:\n- " + "\n- ".join(p))
     f, w = cfg.get("firmware", {}), cfg.get("wireguard", {})
+    if a.flash and not os.path.exists(a.flash):   # find out before the long build, not after it
+        cmd_ports(a)
+        sys.exit("the serial port %s does not exist (see the list above)" % a.flash)
+    if not a.no_build:
+        print("serial ports now:", ", ".join(serial_ports()) or "none (plug the board in before flashing; python3 tools/muse-cloud.py ports lists them)")
     work = os.path.join(ROOT, f.get("workdir", "build"))
     src = os.path.join(work, "muse-gadget-sdk")
     os.makedirs(work, exist_ok=True)
@@ -388,7 +430,7 @@ def cmd_firmware(a):
             sys.exit("flashing failed. If esptool cannot connect: hold BOOT, tap RST, release BOOT, and run this again")
         print("flashed. Pair the device in the Muse app.")
     else:
-        print("to flash:  python3 tools/muse-cloud.py firmware --flash <serial port>   (e.g. /dev/cu.usbmodem1101 or COM5)")
+        print("to flash:  python3 tools/muse-cloud.py firmware --flash <serial port>   (python3 tools/muse-cloud.py ports lists them; e.g. /dev/cu.usbmodem1101, /dev/ttyACM0 or COM5)")
     return 0
 
 
@@ -400,6 +442,7 @@ def main():
     s = sub.add_parser("gateway"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_gateway)
     s = sub.add_parser("firmware"); s.add_argument("--flash", metavar="PORT"); s.add_argument("--no-build", action="store_true"); s.set_defaults(fn=cmd_firmware)
     sub.add_parser("status").set_defaults(fn=cmd_status)
+    sub.add_parser("ports").set_defaults(fn=cmd_ports)
     a = ap.parse_args()
     sys.exit(a.fn(a) or 0)
 

@@ -115,17 +115,37 @@ Resolve any reported problems before continuing.
 python3 tools/muse-cloud.py gateway
 ```
 
-The tool opens a browser for Cloudflare login, creates a KV store for settings, configures access tokens, deploys the Worker with Workers AI and Durable Object bindings, and uploads your Azure, bot and WireGuard settings. It prints the Worker URL and writes it to `muse-cloud.toml`. The command can be run again.
+The tool opens a browser for Cloudflare login, creates a KV store for settings, configures access tokens, deploys the Worker with Workers AI and Durable Object bindings, and uploads your Azure, bot and WireGuard settings. It prints the Worker URL and writes it to `muse-cloud.toml`. The command can be run again. Leave `[gateway] url` empty: the tool fills it in from what Cloudflare reports, and it overrides a value typed by hand.
+
+**On a machine without a browser** (a remote server, for example), `wrangler login` cannot work. Use a Cloudflare API token instead:
+
+1. In the Cloudflare dashboard open My Profile > API Tokens and create a token with **Workers Scripts: Edit**, **Workers KV Storage: Edit** and **Account Settings: Read**. If you set *Client IP Address Filtering*, it must include this machine's address as Cloudflare sees it (check with `curl https://www.cloudflare.com/cdn-cgi/trace`); otherwise Cloudflare answers error 9109.
+2. Enter the token yourself in the terminal, so it does not end up in the shell history or in a chat:
+
+```bash
+read -s CLOUDFLARE_API_TOKEN; export CLOUDFLARE_API_TOKEN
+export CLOUDFLARE_ACCOUNT_ID=<32-character account ID>
+```
+
+The account ID is the 32-character string in the dashboard address (`dash.cloudflare.com/<account ID>/...`) and on the Workers & Pages overview. It is not the account name or your e-mail address. With the token set, the tool skips the login.
 
 Open the admin page at `https://<your-worker>.workers.dev/admin?k=<admin-token>` to test the settings, or run `python3 tools/muse-cloud.py status` to check the gateway.
 
 ### 4. Build and flash the firmware
 
+First find the serial port and note it down:
+
+```bash
+python3 tools/muse-cloud.py ports
+```
+
+It lists the ports it sees (`/dev/cu.usbmodem*` on macOS, `/dev/serial/by-id/*` and `/dev/ttyACM*` on Linux). On Linux the first line also tells you if your account may not open the port: add yourself to the `dialout` group (`sudo usermod -aG dialout $USER`) and log in again. If nothing is listed, use a USB cable that carries data. The `by-id` name stays the same when you plug in other boards, so prefer it on Linux.
+
 ```bash
 python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101
 ```
 
-Replace the serial port with your device's port. The tool fetches the pinned upstream source, applies the patch, generates build settings, then builds and flashes with ESP-IDF. Without `--flash`, it only builds. The first build downloads components; its duration depends on your network and computer.
+Replace the serial port with the one you noted. The tool stops at once if that port does not exist, before the long build. The tool fetches the pinned upstream source, applies the patch, generates build settings, then builds and flashes with ESP-IDF. Without `--flash`, it only builds. The first build downloads components; its duration depends on your network and computer.
 
 If WireGuard is enabled and the device has no key yet, the tool generates a key pair and prints a server-side `wg set` command. Run it on the WireGuard server **before the device's first start**, and save the peer configuration in `wg0.conf` as instructed so it survives a server restart.
 
@@ -187,6 +207,8 @@ The Webhook URL must use HTTPS and a public hostname. This flow has been tested 
 - **Restoring a flash backup causes `HTTP 401`**: pairing again invalidates the old pairing tokens. Restoring an old NVS backup afterwards makes the device use those invalid tokens. Do not rely on an old flash backup to restore pairing.
 - **The SDK token is invalid**: it must be 48 characters, start with `mgst_`, and end in one of `A E I M Q U Y c g k o s w 0 4 8`. Copy it again from [gadgets.muse.ai](https://gadgets.muse.ai), then run `check`.
 - **Deployment fails with Cloudflare error 1010 or a connection error**: access to `workers.dev` can be intermittent on some networks. Run the deployment command again.
+- **`check` says nothing is wrong, but `gateway` fails at once**: look at the error. An empty `[gateway] name` and a wrong account ID are the usual causes.
+- **Cloudflare error 9109 "Cannot use the access token from location"**: the API token has an IP address filter that does not include this machine. Add the address shown by `curl https://www.cloudflare.com/cdn-cgi/trace`, or remove the filter.
 - **The bot never replies**: check the Webhook URL, credentials and whether the bot is allowed to reach the callback's Worker hostname.
 
 ## Costs and verification status
