@@ -4,7 +4,7 @@
 
 本项目是 Meta 的 [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk) 固件的魔改版，目前只支持**微雪 ESP32-S3-Touch-AMOLED-1.75C** 。但是我猜移植到其他 ESP32也不难。本项目在原有基础上增加：
 
-- **先转文字，再交给回答者**：你说的话先先识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再交给 Muse 或Grok bot。我在使用的时候经常发现Muse转译出现问题，有时候甚至会卡住，莫不如我们自己先转了，发给Muse，Azure正常的免费额度足够轻量使用了。
+- **先转文字，再交给回答者**：你说的话先识别成文字（Cloudflare Whisper 或 Azure Speech，可选），再交给 Muse 或Grok bot。我在使用的时候经常发现Muse转译出现问题，有时候甚至会卡住，莫不如我们自己先转了，发给Muse，Azure正常的免费额度足够轻量使用了。
 - **Grok Bot**：在设备的 **Answers** 菜单里切换 Muse 和Grok Bot。
 - **语音播报**：回复由 Azure Speech 合成语音，在设备上播放。个人使用通常在免费额度内，具体以服务商当前的条款为准。
 - **Muse 把文字发到屏幕上**：原版固件里 Muse 只能发图片。本项目还支持接收文字：`display.show_text` 命令把文字显示成滚动的提词器并可朗读，Muse 主动发来的消息也可以被念出来（“所有消息”）。
@@ -25,7 +25,7 @@
 
 一个简短的工作流程：
 
-每一句话都先转成文字，设备把录音交给Azuer（或者Cloudflare，下文就只写一个）识别，Azure把文字返回给设备。设备再把这段文字交给设备里设置页面**Answers** 里选定的回答来源：选 Muse 时，设备直接把文字发给 Muse；选 Grok bot时，文字经网关转给Grok bot，Grok Bot通过回调把答案送回Cloudflare网关。回复文字再由Cloudflare网关送去Azure一句一句合成语音，在设备上播放。
+每一句话都先转成文字，设备把录音交给Azure（或者Cloudflare，下文就只写一个）识别，Azure把文字返回给设备。设备再把这段文字交给设备里设置页面**Answers** 里选定的回答来源：选 Muse 时，设备直接把文字发给 Muse；选 Grok bot时，文字经网关转给Grok bot，Grok Bot通过回调把答案送回Cloudflare网关。回复文字再由Cloudflare网关送去Azure一句一句合成语音，在设备上播放。
 
 流程图：
 
@@ -61,7 +61,7 @@ sequenceDiagram
   end
 ```
 
-WireGuard 是在网络不可达是备选通道，不改变上述回答来源或处理流程。
+WireGuard 是在网络不可达时的备选通道，不改变上述回答来源或处理流程。
 
 ## 开始前准备
 

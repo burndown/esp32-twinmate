@@ -6,3 +6,4 @@ node_modules/
 muse-cloud.toml
 build/
 worker/wrangler.generated.toml
+__pycache__/
