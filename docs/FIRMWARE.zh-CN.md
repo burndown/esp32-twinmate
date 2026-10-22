@@ -43,7 +43,7 @@
 | 选项 | 作用 |
 |---|---|
 | `MUSE_STT_URL` `MUSE_TTS_URL` `MUSE_BRAIN_URL` | 识别、合成、对话三个网关地址（带 `?k=设备令牌`）。纯云端版三个都指向 Worker |
-| `MUSE_*_FALLBACK_URL` | 不在家时用的备用地址（家里版用，纯云端留空） |
+| `MUSE_*_FALLBACK_URL` | 不在家时用的备用地址（给家里的网关用，本仓库不含，留空） |
 | `MUSE_HOME_SSID` | 家里 Wi-Fi 的名字。设了之后，在家用内网地址，其他网络用备用地址；纯云端留空 |
 | `MUSE_MODEL_ANSWERS` | `y`：Answers 里有模型，Muse 或 Bot 失败时模型接手；`n`：只有 Muse 和 Grok Bot，失败就显示错误 |
 | `MUSE_BRAIN_GIVEUP_SECONDS` | Muse 多久没回一个字就让网关的模型接手（默认 30） |
@@ -62,7 +62,7 @@ cd muse-gadget-sdk && git checkout fa07304
 git apply /path/to/esp32-twinmate/firmware/muse-cloud.patch
 ```
 
-把 `firmware/sdkconfig.cloud-only.example`（纯云端）或 `firmware/sdkconfig.cloud.example`（家里网关）复制成你**不提交**的文件，填好，然后（ESP-IDF 6.0.1）：
+把 `firmware/sdkconfig.cloud-only.example`（纯云端）复制成你**不提交**的文件，填好，然后（ESP-IDF 6.0.1）：
 
 ```bash
 cd esp32

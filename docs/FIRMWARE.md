@@ -43,8 +43,8 @@ With `tools/muse-cloud.py` these are generated from `muse-cloud.toml`; you do no
 | Option | What it does |
 |---|---|
 | `MUSE_STT_URL` `MUSE_TTS_URL` `MUSE_BRAIN_URL` | The three gateway addresses for recognition, synthesis and chat (with `?k=device token`). In the cloud-only setup all three point to the Worker |
-| `MUSE_*_FALLBACK_URL` | Addresses to use when away from home (for the home-server setup; leave empty for cloud-only) |
-| `MUSE_HOME_SSID` | The name of your home Wi-Fi. When set, the LAN addresses are used at home and the fallback addresses on any other network; leave empty for cloud-only |
+| `MUSE_*_FALLBACK_URL` | Addresses to use when away from home (for a home gateway, which is not part of this repository; leave empty) |
+| `MUSE_HOME_SSID` | The name of your home Wi-Fi. When set, the LAN addresses are used at home and the fallback addresses on any other network; leave empty |
 | `MUSE_MODEL_ANSWERS` | `y`: Answers has the model, and it takes over when Muse or the bot fails. `n`: only Muse and the Grok Bot, and a failure shows an error |
 | `MUSE_BRAIN_GIVEUP_SECONDS` | How long Muse may stay silent before the gateway's model is asked instead (default 30) |
 | `MUSE_GATEWAY_VIA_TUNNEL` | Requests to the gateway also go through WireGuard (for networks that cannot reach Cloudflare) |
@@ -62,7 +62,7 @@ cd muse-gadget-sdk && git checkout fa07304
 git apply /path/to/esp32-twinmate/firmware/muse-cloud.patch
 ```
 
-Copy `firmware/sdkconfig.cloud-only.example` (cloud-only) or `firmware/sdkconfig.cloud.example` (home gateway) to a file that you **do not commit**, fill it in, and then (ESP-IDF 6.0.1):
+Copy `firmware/sdkconfig.cloud-only.example` (cloud-only) to a file that you **do not commit**, fill it in, and then (ESP-IDF 6.0.1):
 
 ```bash
 cd esp32

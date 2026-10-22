@@ -64,7 +64,7 @@ upstream = "https://github.com/facebookincubator/muse-gadget-sdk.git"
 upstream_commit = "fa07304"
 # Where the sources and the build go (inside this repository's folder; ignored by git).
 workdir = "build"
-# false: Settings > Answers offers only Muse and the Grok Bot, and a failure is shown as an error. true needs a language model on the gateway (worker-home).
+# false: Settings > Answers offers only Muse and the Grok Bot, and a failure is shown as an error. Keep false: true needs a gateway with a language model, which is not part of this repository.
 model_answers = false
-# The name of your home Wi-Fi. With a home server (worker-home) the firmware uses its LAN address there; leave empty for the cloud-only setup.
+# The name of your home Wi-Fi. Only for a home gateway, which is not part of this repository; leave empty.
 home_ssid = ""
