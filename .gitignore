@@ -7,3 +7,8 @@ muse-cloud.toml
 build/
 worker/wrangler.generated.toml
 __pycache__/
+
+# the home-gateway parts live in a private repository, not here
+/home/
+/homebox/
+/worker-home/
