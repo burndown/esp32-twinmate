@@ -206,6 +206,8 @@ python3 tools/muse-cloud.py firmware --flash /dev/cu.usbmodem1101
 3. 网关先让设备播放确认提示，再保持连接等待答案，最长 270 秒。收到答案后由设备播放；超时则报告机器人未回复。
 4. 如果机器人限制可访问的外部地址，需将回调地址中的 Worker 域名加入允许列表，否则回调会被拦截。
 
+Grok Bot 一次提问如何使用 KV 和 Durable Object，见 [技术细节](docs/GROK-BOT.zh-CN.md)。
+
 Webhook 地址必须使用 HTTPS，且主机名为公网域名。该流程已通过真实 Webhook 机器人（Cursor 自动化）验证，仓库未提供独立的示例机器人服务器。
 
 

@@ -185,6 +185,8 @@ The device menu calls this answer source **Grok Bot**. Any bot that implements t
 3. The gateway first makes the device play an acknowledgement, then holds the connection for up to 270 seconds. The device speaks the answer when it arrives, or reports a timeout if the bot does not reply.
 4. If the bot restricts outbound requests, add the callback's Worker hostname to its allowlist. Otherwise the callback will be blocked.
 
+How one Grok Bot question uses KV and Durable Objects is explained in the [technical details](docs/GROK-BOT.md).
+
 The Webhook URL must use HTTPS and a public hostname. This flow has been tested with a real Webhook bot implemented as a Cursor automation. The repository does not include a stand-alone example bot server.
 
 ## Main configuration settings
