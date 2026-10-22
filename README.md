@@ -4,14 +4,16 @@
 
 This project is a modified version of the firmware of Meta's [Muse Gadgets SDK](https://github.com/facebookincubator/muse-gadget-sdk), for the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** round touch screen (the only board supported so far). It adds:
 
-- **Text first, then the answerer.** What you say is first recognised by your own gateway (Cloudflare Whisper or Azure Speech, your choice), and the resulting text is handed to Muse or to a bot.
-- **A custom Webhook bot.** Switch between Muse and a bot in the device's **Answers** menu. The menu calls it **Grok Bot**, but any bot that accepts an HTTPS Webhook and sends its answer back by callback will do; it does not have to use a Grok model.
+- **Text first, then the answerer.** What you say is first recognised by your own gateway (Cloudflare Whisper or Azure Speech, your choice), and the resulting text is handed to Muse or to the Grok Bot. In my own use, Muse's transcription often went wrong and sometimes even hung, so it is better to transcribe first and send Muse the text; Azure's normal free allowance is enough for light use.
+- **Grok Bot.** Switch between Muse and the Grok Bot in the device's **Answers** menu. Any bot that accepts an HTTPS Webhook and sends its answer back by callback will do; it does not have to use a Grok model.
 - **Spoken replies.** Replies are synthesised with Azure Speech and played on the device. For one person the usage normally stays within the free tiers; check the providers' current terms.
 - **Text from Muse on the screen.** The original firmware lets Muse send only pictures. This one also accepts text: the `display.show_text` command shows it as a scrolling teleprompter and can read it aloud, and Muse's own messages can be spoken ("All messages").
-- **WireGuard (optional).** When the network you are on cannot reach Muse directly, the device connects through a Linux server of your own.
-- **A Cloudflare gateway.** Deployed to your own account; a settings page manages recognition, synthesis, the bot and WireGuard, and the device and admin tokens are separate.
-- **Avatars and interactions.** Blinking eyes that follow your finger and the tilt of the board, avatars you can change (including a picture of your own), a waiting ring, and a clean main screen where the status icons appear only when you touch it.
+- **WireGuard (optional).** When the network you are on cannot reach Muse directly, the device connects through a Linux server of your own. It suits the times you are away from home, where the home network's traffic splitting is not available: public Wi-Fi or a phone hotspot.
+- **A Cloudflare gateway.** One gateway that manages the recognition and synthesis above, the Grok Bot settings and WireGuard, with separate device and admin tokens. Deploying it on Cloudflare, in your own account, is recommended; the free tier is enough.
+- **Avatars and interactions.** Avatars you can change (including a picture of your own).
 - **One settings file, three commands** to deploy the gateway, build the firmware and flash it. See the [firmware guide](docs/FIRMWARE.md) for every feature, including the stability fixes.
+
+## Disclaimer
 
 It builds on other people's work: Meta's firmware (Apache-2.0), the eyes adapted from [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot) (MIT), and "All messages" adapted from [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk). See [Security and licensing](#security-and-licensing).
 
@@ -19,7 +21,7 @@ This is a personal project and has not been reviewed by Meta. Muse requires your
 
 ## How it works
 
-Every question is first turned into text: the device sends the recording to the gateway, which recognises it and returns the text. The device then sends that text to the answer source chosen in **Answers**. With Muse selected, the device sends the text to Muse directly. With the Webhook bot selected, the text goes through the gateway to the bot, which sends its answer back to the gateway by callback. The reply text is then turned into speech by the gateway, one sentence at a time, and played on the device.
+Every question is first turned into text: the device sends the recording to the gateway, which recognises it and returns the text. The device then sends that text to the answer source chosen in **Answers**. With Muse selected, the device sends the text to Muse directly. With the Webhook bot selected, the text goes through the gateway to the bot, which sends its answer back to the Cloudflare gateway by callback. The gateway then sends the reply text to Azure to be turned into speech, one sentence at a time, and it is played on the device.
 
 ```mermaid
 sequenceDiagram
@@ -60,14 +62,14 @@ WireGuard is an optional network path. It does not change the answer source or p
 | Item | Requirements |
 |---|---|
 | Board | Waveshare ESP32-S3-Touch-AMOLED-1.75C and a USB-C **data** cable |
-| Muse | A Muse account and an [SDK token](https://gadgets.muse.ai) |
+| Muse / Grok Bot | A Muse account and an [SDK token](https://gadgets.muse.ai); a Grok Bot account if you use it |
 | Cloudflare | An account for deploying the gateway; you can start with the free plan |
 | Azure | The key and region name of an [Azure Speech](https://portal.azure.com) resource, for example `eastasia`; Free F0 is an available pricing tier |
 | Computer | macOS or Linux; Python 3.8+, Node.js, git and [ESP-IDF 6.0.1](https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/index.html) |
 | Webhook bot | Optional. A bot that accepts an HTTPS Webhook and sends its reply back over HTTPS |
 | WireGuard server | Optional. Only needed when Muse or Cloudflare cannot be reached directly; see the [server guide](docs/wireguard-server.md) |
 
-To get a Muse token, sign in at [gadgets.muse.ai](https://gadgets.muse.ai) and accept the terms. The tool below handles Cloudflare login, KV creation and Worker deployment. After creating an Azure Speech resource, copy a key from **Keys and Endpoint**. Enter the region name, such as `eastasia`, in the configuration, not the endpoint URL. Provider pages and free allowances may change; check their official sites.
+To get a Muse token, sign in at [gadgets.muse.ai](https://gadgets.muse.ai) and accept the terms. You can ask the Grok Bot itself to generate how it is called. The tool below handles Cloudflare login, KV creation and Worker deployment. After creating an Azure Speech resource, copy a key from **Keys and Endpoint**. Enter the region name, such as `eastasia`, in the configuration, not the endpoint URL. Provider pages and free allowances may change; check their official sites.
 
 Install ESP-IDF **6.0.1** using Espressif's guide; other versions have not been verified. The tool expects it at `~/esp/esp-idf-v6.0.1`. If you install it elsewhere, update `idf_path` in the configuration.
 
