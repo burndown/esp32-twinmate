@@ -1,4 +1,6 @@
-# muse-gadget-cloud
+# ESP32 TwinMate
+
+**给你的 ESP32 小设备配上两个 AI 伙伴。Muse 和 Grok Bot 随心切换，语音播报，在家出门都在线。**
 
 [English](README.en.md) · **中文**
 

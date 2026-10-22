@@ -1,4 +1,6 @@
-# muse-gadget-cloud
+# ESP32 TwinMate
+
+**Two AI companions for your ESP32 gadget. Switch between Muse and Grok Bot, hear spoken replies, stay connected at home or away.**
 
 **English** · [中文](README.md)
 
