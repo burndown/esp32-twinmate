@@ -1,6 +1,6 @@
 # 验证记录
 
-[English](VALIDATION.md) · **中文** · [返回 README](../README.zh-CN.md)
+[English](VALIDATION.md) · **中文** · [返回 README](../README.md)
 
 本文保存原 README 中已有的 2026-10-21 测试记录。整理文档时未重新部署、编译或刷写设备；以下“通过”表示此前记录的结果。
 

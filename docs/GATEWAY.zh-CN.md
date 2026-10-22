@@ -2,7 +2,7 @@
 
 [English](GATEWAY.md) · **中文**
 
-固件只会说几个 HTTP 接口，网关把它们翻译成云服务的 API。这份文档讲 `worker/` 里这个精简的 Cloudflare 版：接口、令牌、设置页、防护、免费额度，以及验证到了哪一步。部署的步骤在 [README](../README.zh-CN.md)（`tools/muse-cloud.py gateway` 一条命令完成）。
+固件只会说几个 HTTP 接口，网关把它们翻译成云服务的 API。这份文档讲 `worker/` 里这个精简的 Cloudflare 版：接口、令牌、设置页、防护、免费额度，以及验证到了哪一步。部署的步骤在 [README](../README.md)（`tools/muse-cloud.py gateway` 一条命令完成）。
 
 ## 接口
 

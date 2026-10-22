@@ -2,7 +2,7 @@
 
 **English** · [中文](HOME-SERVER.zh-CN.md)
 
-This page is about the **full edition of the gateway**: several cloud providers, local recognition, a language model at home, run on a server of your own, used on the local network, with a public entrance added for when you are away. If you only want the simplest cloud-only setup you do not need this page; go back to the [README](../README.md).
+This page is about the **full edition of the gateway**: several cloud providers, local recognition, a language model at home, run on a server of your own, used on the local network, with a public entrance added for when you are away. If you only want the simplest cloud-only setup you do not need this page; go back to the [README](../README.en.md).
 
 First, how this edition differs from the cloud-only one:
 

@@ -1,6 +1,6 @@
 # Validation record
 
-**English** · [中文](VALIDATION.zh-CN.md) · [Back to README](../README.md)
+**English** · [中文](VALIDATION.zh-CN.md) · [Back to README](../README.en.md)
 
 This page preserves test records dated 2026-10-21 from the previous README. No deployment, firmware build or device flash was repeated while editing the documentation. “Passed” below refers to the previously recorded results.
 

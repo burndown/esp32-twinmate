@@ -2,7 +2,7 @@
 
 **English** · [中文](GATEWAY.zh-CN.md)
 
-The firmware speaks only a few HTTP calls. The gateway turns them into calls to cloud services. This page describes the slim Cloudflare edition in `worker/`: its calls, tokens, settings page, protections, free allowances, and how far it has been verified. How to deploy it is in the [README](../README.md) (one command: `tools/muse-cloud.py gateway`).
+The firmware speaks only a few HTTP calls. The gateway turns them into calls to cloud services. This page describes the slim Cloudflare edition in `worker/`: its calls, tokens, settings page, protections, free allowances, and how far it has been verified. How to deploy it is in the [README](../README.en.md) (one command: `tools/muse-cloud.py gateway`).
 
 ## Calls
 
