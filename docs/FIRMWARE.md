@@ -59,7 +59,7 @@ With `tools/muse-cloud.py` these are generated from `muse-cloud.toml`; you do no
 ```bash
 git clone https://github.com/facebookincubator/muse-gadget-sdk.git
 cd muse-gadget-sdk && git checkout fa07304
-git apply /path/to/muse-gadget-cloud/firmware/muse-cloud.patch
+git apply /path/to/esp32-twinmate/firmware/muse-cloud.patch
 ```
 
 Copy `firmware/sdkconfig.cloud-only.example` (cloud-only) or `firmware/sdkconfig.cloud.example` (home gateway) to a file that you **do not commit**, fill it in, and then (ESP-IDF 6.0.1):

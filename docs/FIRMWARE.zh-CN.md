@@ -59,7 +59,7 @@
 ```bash
 git clone https://github.com/facebookincubator/muse-gadget-sdk.git
 cd muse-gadget-sdk && git checkout fa07304
-git apply /path/to/muse-gadget-cloud/firmware/muse-cloud.patch
+git apply /path/to/esp32-twinmate/firmware/muse-cloud.patch
 ```
 
 把 `firmware/sdkconfig.cloud-only.example`（纯云端）或 `firmware/sdkconfig.cloud.example`（家里网关）复制成你**不提交**的文件，填好，然后（ESP-IDF 6.0.1）：

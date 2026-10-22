@@ -91,8 +91,8 @@ WireGuard 是在网络不可达时的备选通道，不改变上述回答来源�
 ## 快速开始
 
 ```bash
-git clone https://github.com/burndown/muse-gadget-cloud.git
-cd muse-gadget-cloud
+git clone https://github.com/burndown/esp32-twinmate.git
+cd esp32-twinmate
 ```
 
 ### 1. 生成配置文件

@@ -80,8 +80,8 @@ Install ESP-IDF **6.0.1** using Espressif's guide; other versions have not been 
 ## Quick start
 
 ```bash
-git clone https://github.com/burndown/muse-gadget-cloud.git
-cd muse-gadget-cloud
+git clone https://github.com/burndown/esp32-twinmate.git
+cd esp32-twinmate
 ```
 
 ### 1. Create the configuration file
