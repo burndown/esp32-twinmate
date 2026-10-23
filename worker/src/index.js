@@ -429,14 +429,56 @@ async function wgList(env, W) {
   return Object.entries(peers).sort((a, b) => a[1].n - b[1].n).map(([pub, p]) => ({ pub, ip: W.subnet + p.n, at: p.at, ok: !!p.ok, cmd: `sudo wg set wg0 peer '${pub}' allowed-ips ${W.subnet}${p.n}/32` }));
 }
 
-// ---- avatar picture ---------------------------------------------------------------------------------
+// ---- devices, avatar and badge pictures ---------------------------------------------------------------
+// Several gadgets can use one gateway, each with its own avatar and badge pictures. A gadget names itself with `d=<node id>`
+// ("homelink-" and six hex digits) on the calls below; a call without a valid `d` is the older single set, kept as it was.
+// The first time a gadget asks, and only after its token was checked, it is entered in the list `devices` (at most MAX_DEVICES;
+// the settings page can rename it). KV keys: "devices" = {id: {name, first_seen, last_seen}}, and per gadget "avatar:<d>",
+// "badges:<d>" (a JSON list [{n, v, w, h, bytes}]) and "badge:<d>:<n>"; the older set is "avatar", "badges", "badge:<n>".
+const DEVICE_RE = /^homelink-[0-9a-f]{6}$/;
+const MAX_DEVICES = 8;
+const SEEN_EVERY = 600;   // seconds: a gadget's last_seen is written at most this often (KV writes are rate-limited)
+const devParam = (url) => { const d = url.searchParams.get("d") || ""; return DEVICE_RE.test(d) ? d : ""; };
+const kAvatar = (d) => (d ? "avatar:" + d : "avatar");
+const kBadges = (d) => (d ? "badges:" + d : "badges");
+const kBadge = (d, n) => (d ? "badge:" + d + ":" + n : "badge:" + n);
+
+async function devicesGet(env) {
+  const v = env.CFG ? await env.CFG.get("devices", "json").catch(() => null) : null;
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+async function deviceSeen(env, d) {
+  if (!d || !env.CFG) return;
+  const devs = await devicesGet(env);
+  const now = Math.floor(Date.now() / 1000);
+  const e = devs[d];
+  if (!e) {
+    if (Object.keys(devs).length >= MAX_DEVICES) return;
+    devs[d] = { name: "Device " + d.slice(-6), first_seen: now, last_seen: now };
+  } else if (now - (e.last_seen || 0) < SEEN_EVERY) {
+    return;
+  } else {
+    e.last_seen = now;
+  }
+  await env.CFG.put("devices", JSON.stringify(devs));
+}
+// For the settings page: a gadget it names must be one in the list.
+async function knownDevice(env, d) {
+  return !d || d in (await devicesGet(env));
+}
+
+// ---- avatar picture
 // One picture for the round screen: 16-byte header ("MAV1", width, height, byte count) + RGB565 pixels (tools/make-avatar-img.py).
-async function avatarGet(env) {
-  const b = env.CFG && (await env.CFG.get("avatar", "arrayBuffer"));
+async function avatarGet(env, url, asDevice) {
+  const d = devParam(url);
+  if (asDevice) await deviceSeen(env, d);
+  const b = env.CFG && (await env.CFG.get(kAvatar(d), "arrayBuffer"));
   if (!b) return json({ error: "no picture" }, 404);
   return new Response(b, { headers: { "content-type": "application/octet-stream", "content-length": String(b.byteLength) } });
 }
-async function avatarSet(req, env) {
+async function avatarSet(req, env, url) {
+  const d = devParam(url);
+  if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
   if ((+req.headers.get("content-length") || 0) > MAX_AVATAR) return tooLarge();
   const b = await req.arrayBuffer();
   if (b.byteLength > MAX_AVATAR) return tooLarge();
@@ -444,38 +486,45 @@ async function avatarSet(req, env) {
   if (b.byteLength < 16 || v.getUint32(0, true) !== 0x3156414d) return json({ error: "not a MAV1 picture" }, 400);
   const w = v.getUint16(4, true), h = v.getUint16(6, true), n = v.getUint32(8, true);
   if (w > 240 || h > 240 || n !== w * h * 2 || b.byteLength !== 16 + n) return json({ error: "bad size" }, 400);
-  await env.CFG.put("avatar", b);
+  await env.CFG.put(kAvatar(d), b);
   return json({ ok: true, w, h, bytes: n });
 }
 // The settings page shows and removes the picture (admin token); the device asks with POST /avatar (device token).
-async function avatarView(env) {
-  return await avatarGet(env);
+async function avatarView(env, url) {
+  return await avatarGet(env, url, false);
 }
-async function avatarDelete(env) {
-  await env.CFG.delete("avatar");
+async function avatarDelete(env, url) {
+  const d = devParam(url);
+  if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
+  await env.CFG.delete(kAvatar(d));
   return json({ ok: true });
 }
 
-// ---- badge pictures ---------------------------------------------------------------------------------
+// ---- badge pictures
 // Up to MAX_BADGES full-screen pictures. Each is stored as the exact bytes the device keeps in a badge slot: a 16-byte header
-// ("MBG1", width, height, byte count, version) + RGB565 little-endian pixels. The browser makes them (admin page), so nothing
+// ("MBG1", width, height, byte count, version) + RGB565 little-endian pixels. The browser makes them (settings page), so nothing
 // here needs an image library. The version is a number the Worker puts in the header's last four bytes when the picture is stored;
 // the device copies a picture again only when its version differs from the one in its slot.
-// KV: "badge:<n>" = the picture, "badges" = a JSON list [{n, v, w, h, bytes}] in slot order.
-async function badgeIndex(env) {
-  const l = env.CFG ? await env.CFG.get("badges", "json").catch(() => null) : null;
+async function badgeIndex(env, d) {
+  const l = env.CFG ? await env.CFG.get(kBadges(d), "json").catch(() => null) : null;
   return Array.isArray(l) ? l : [];
 }
-async function badgeList(env) {
-  return json({ items: await badgeIndex(env) });
+async function badgeList(env, url, asDevice) {
+  const d = devParam(url);
+  if (asDevice) await deviceSeen(env, d);
+  return json({ items: await badgeIndex(env, d) });
 }
-async function badgeGet(env, n) {
+async function badgeGet(env, url, n, asDevice) {
+  const d = devParam(url);
   if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "no such picture" }, 404);
-  const b = env.CFG && (await env.CFG.get("badge:" + n, "arrayBuffer"));
+  if (asDevice) await deviceSeen(env, d);
+  const b = env.CFG && (await env.CFG.get(kBadge(d, n), "arrayBuffer"));
   if (!b) return json({ error: "no such picture" }, 404);
   return new Response(b, { headers: { "content-type": "application/octet-stream", "content-length": String(b.byteLength) } });
 }
 async function badgeSet(req, env, url) {
+  const d = devParam(url);
+  if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
   const n = parseInt(url.searchParams.get("n"), 10);
   if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "n must be 0.." + (MAX_BADGES - 1) }, 400);
   if ((+req.headers.get("content-length") || 0) > MAX_BADGE) return tooLarge();
@@ -485,22 +534,73 @@ async function badgeSet(req, env, url) {
   if (b.byteLength < 16 || v.getUint32(0, true) !== 0x3147424d) return json({ error: "not an MBG1 picture" }, 400);
   const w = v.getUint16(4, true), h = v.getUint16(6, true), bytes = v.getUint32(8, true);
   if (w < 16 || h < 16 || w > 466 || h > 466 || bytes !== w * h * 2 || b.byteLength !== 16 + bytes) return json({ error: "bad size" }, 400);
-  const items = (await badgeIndex(env)).filter((x) => x.n !== n);
+  const items = (await badgeIndex(env, d)).filter((x) => x.n !== n);
   const ver = (Date.now() / 1000) >>> 0 || 1;   // seconds since 1970: changes whenever the picture is stored again
   v.setUint32(12, ver, true);
-  await env.CFG.put("badge:" + n, b);
+  await env.CFG.put(kBadge(d, n), b);
   items.push({ n, v: ver, w, h, bytes });
   items.sort((a, c) => a.n - c.n);
-  await env.CFG.put("badges", JSON.stringify(items));
+  await env.CFG.put(kBadges(d), JSON.stringify(items));
   return json({ ok: true, n, v: ver, w, h, bytes });
 }
 async function badgeDelete(req, env, url) {
+  const d = devParam(url);
+  if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
   const n = parseInt(url.searchParams.get("n"), 10);
   if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "n must be 0.." + (MAX_BADGES - 1) }, 400);
-  const items = (await badgeIndex(env)).filter((x) => x.n !== n);
-  await env.CFG.delete("badge:" + n);
-  await env.CFG.put("badges", JSON.stringify(items));
+  const items = (await badgeIndex(env, d)).filter((x) => x.n !== n);
+  await env.CFG.delete(kBadge(d, n));
+  await env.CFG.put(kBadges(d), JSON.stringify(items));
   return json({ ok: true });
+}
+
+// ---- the list of gadgets, for the settings page
+async function adminDevices(env) {
+  const devs = await devicesGet(env);
+  const out = [];
+  for (const [d, e] of Object.entries(devs)) {
+    out.push({ d, name: e.name || d, first_seen: e.first_seen || 0, last_seen: e.last_seen || 0,
+      badges: (await badgeIndex(env, d)).length, avatar: !!(await env.CFG.get(kAvatar(d), "arrayBuffer")) });
+  }
+  out.sort((a, b) => b.last_seen - a.last_seen);
+  return json({ devices: out, legacy: { badges: (await badgeIndex(env, "")).length, avatar: !!(await env.CFG.get("avatar", "arrayBuffer")) }, max: MAX_DEVICES });
+}
+async function adminDevice(req, env) {
+  const { d, name, remove } = await req.json().catch(() => ({}));
+  if (typeof d !== "string" || !DEVICE_RE.test(d)) return json({ error: "bad device id" }, 400);
+  const devs = await devicesGet(env);
+  if (!devs[d]) return json({ error: "unknown device" }, 404);
+  if (remove) {
+    for (let n = 0; n < MAX_BADGES; n++) await env.CFG.delete(kBadge(d, n));
+    await env.CFG.delete(kBadges(d));
+    await env.CFG.delete(kAvatar(d));
+    delete devs[d];
+  } else if (typeof name === "string" && name.trim()) {
+    devs[d].name = name.trim().slice(0, 40);
+  } else {
+    return json({ error: "nothing to do" }, 400);
+  }
+  await env.CFG.put("devices", JSON.stringify(devs));
+  return json({ ok: true });
+}
+// Copies the older single set (avatar and badge pictures) to a gadget, where it has none of its own yet. The older set stays,
+// so a gadget with the older firmware keeps working.
+async function adminMigrate(env, url) {
+  const d = devParam(url);
+  if (!d || !(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
+  let avatar = false, badges = 0;
+  const av = await env.CFG.get("avatar", "arrayBuffer");
+  if (av && !(await env.CFG.get(kAvatar(d), "arrayBuffer"))) { await env.CFG.put(kAvatar(d), av); avatar = true; }
+  const old = await badgeIndex(env, "");
+  if (old.length && !(await badgeIndex(env, d)).length) {
+    for (const it of old) {
+      const b = await env.CFG.get(kBadge("", it.n), "arrayBuffer");
+      if (b) await env.CFG.put(kBadge(d, it.n), b);
+    }
+    await env.CFG.put(kBadges(d), JSON.stringify(old));
+    badges = old.length;
+  }
+  return json({ ok: true, avatar, badges });
 }
 
 // ---- settings page -------------------------------------------------------------------------------------
@@ -508,6 +608,9 @@ const mask = (v) => (v ? "已设置 ••••" + v.slice(-4) : "");
 
 async function admin(req, env, url, all) {
   const p = url.pathname;
+  if (p === "/admin/devices" && req.method === "GET") return await adminDevices(env);
+  if (p === "/admin/device" && req.method === "POST") return await adminDevice(req, env);
+  if (p === "/admin/migrate" && req.method === "POST") return await adminMigrate(env, url);
   if (p === "/admin" && req.method === "GET") return text(adminHtml, 200, "text/html; charset=utf-8");
   if (p === "/admin/api" && req.method === "GET") {
     const secrets = {};
@@ -600,6 +703,7 @@ export default {
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the bot calls this: a one-time token, not the gateway token
     const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
     let allowed = !!want && (await safeEq(givenToken(req, url), want));
+    const asDevice = allowed && !isAdminPath(url.pathname);   // a gadget's own call (not the settings page's)
     // The settings page (admin token) also reads the badge pictures the device reads (device token) to show them.
     if (!allowed && env.ADMIN_TOKEN && req.method === "GET" && /^\/badge\/(list|\d)$/.test(url.pathname)) allowed = await safeEq(givenToken(req, url), env.ADMIN_TOKEN);
     if (!allowed) return text("forbidden", 403);
@@ -608,9 +712,9 @@ export default {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
       if (url.pathname === "/wg/peers" && req.method === "GET") return text((await wgList(env, all.cfg.wg)).map((p) => p.cmd + "   # asked " + p.at + (p.ok ? " (approved)" : "")).join("\n") + "\n");
       if (url.pathname === "/health") return json({ ok: true, asr: all.cfg.asr.provider, tts: "azure:" + all.cfg.tts.voice, bot: !!(all.S.grokbot_url && all.S.grokbot_auth), wg: !!(all.cfg.wg.server_pub && all.cfg.wg.endpoint) });
-      if (url.pathname === "/badge/list" && req.method === "GET") return await badgeList(env);
-      if (/^\/badge\/\d$/.test(url.pathname) && req.method === "GET") return await badgeGet(env, parseInt(url.pathname.slice(7), 10));
-      if (url.pathname === "/avatar/view" && req.method === "GET") return await avatarView(env);
+      if (url.pathname === "/badge/list" && req.method === "GET") return await badgeList(env, url, asDevice);
+      if (/^\/badge\/\d$/.test(url.pathname) && req.method === "GET") return await badgeGet(env, url, parseInt(url.pathname.slice(7), 10), asDevice);
+      if (url.pathname === "/avatar/view" && req.method === "GET") return await avatarView(env, url);
       if (req.method !== "POST") return text("method", 405);
       if (url.pathname === "/badge/set") return await badgeSet(req, env, url);
       if (url.pathname === "/badge/delete") return await badgeDelete(req, env, url);
@@ -618,9 +722,9 @@ export default {
       if (url.pathname === "/tts") return await tts(req, env, all);
       if (url.pathname === "/chat") return await chat(req, env, all);
       if (url.pathname === "/wg/enroll") return await wgEnroll(req, env, all);
-      if (url.pathname === "/avatar") return await avatarGet(env);
-      if (url.pathname === "/avatar/delete") return await avatarDelete(env);
-      if (url.pathname === "/avatar/set") return await avatarSet(req, env);
+      if (url.pathname === "/avatar") return await avatarGet(env, url, asDevice);
+      if (url.pathname === "/avatar/delete") return await avatarDelete(env, url);
+      if (url.pathname === "/avatar/set") return await avatarSet(req, env, url);
       return text("not found", 404);
     } catch (e) {
       console.log("error", String(e).slice(0, 300));

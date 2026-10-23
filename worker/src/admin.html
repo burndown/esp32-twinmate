@@ -125,13 +125,27 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 <p class="intro">圆屏上的头像和 Badge 图片：在这里上传，再到设备上取回。上传后立即生效，不需要点保存。</p>
 
 <div class="card">
+<h2>设备</h2>
+<p class="hint" style="margin-top:6px">头像和 Badge 图片按设备分开保存。设备第一次来取图时会自动出现在这里（设备要用带设备编号的新固件）。</p>
+<div class="row" style="align-items:flex-end">
+ <div><label>当前设备</label><select id="dev_sel" onchange="devChange()"></select></div>
+ <div style="flex:0 0 auto"><button onclick="devRename()">改名</button> <button onclick="devRemove()">删除设备</button></div>
+</div>
+<div class="st" id="dev_info" style="color:var(--mute)"></div>
+<p id="dev_migrate" style="display:none;margin:10px 0 0"><button onclick="devMigrate()">把旧的头像和图片分给这台设备</button> <span class="hint">复制一份，旧的那套保留，旧固件继续用它。</span></p>
+<div class="st" id="dev_msg"></div>
+</div>
+
+<div class="card">
 <h2>头像</h2>
-<p class="hint" style="margin-top:6px">圆圆主屏上的图片头像（在设备上选“设置 → Avatar → Get picture”取回，再选 Picture）。图片在你自己的浏览器里缩成 233×233（居中裁成正方形，圆外涂黑）再上传，不经过任何第三方。</p>
-<div class="row" style="align-items:center">
- <div style="flex:0 0 130px"><canvas id="av_cv" width="233" height="233" style="width:120px;height:120px;border-radius:50%;border:1px solid var(--line);background:#000"></canvas></div>
+<p class="hint" style="margin-top:6px">圆屏主屏上的图片头像（在设备上选“设置 → Avatar → Get picture”取回，再选 Picture）。图片在你自己的浏览器里缩成 233×233（居中裁成正方形，圆外涂黑）再上传，不经过任何第三方。</p>
+<div class="row" style="align-items:flex-start">
+ <div style="flex:0 0 130px"><div class="hint">当前</div><canvas id="av_cv" width="233" height="233" style="width:120px;height:120px;border-radius:50%;border:1px solid var(--line);background:#000"></canvas></div>
  <div>
   <div class="st" id="av_state" style="color:var(--mute)">读取中…</div>
-  <input type="file" id="av_file" accept="image/*">
+  <input type="file" id="av_file" accept="image/*" onchange="previewFiles('av')">
+  <div class="chk"><input type="checkbox" id="av_clock" onchange="redrawAll('av')"> 预览时叠加时间（看表盘字压在图上的样子）。拖动图片调整位置，用滑块缩放</div>
+  <div id="av_prev" class="row" style="margin-top:8px"></div>
   <p style="margin:10px 0 0"><button onclick="avatarUpload()">上传头像</button> <button onclick="avatarDelete()">删除头像</button></p>
   <div class="st" id="av_msg"></div>
  </div>
@@ -141,7 +155,9 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 <div class="card">
 <h2>Badge 图片</h2>
 <p class="hint" style="margin-top:6px">最多 9 张全屏图片，圆圆在“设置 → Badge”里点“同步”就会取回。图片在你自己的浏览器里缩成 466×466（居中裁成正方形，圆屏外的四角涂黑）再上传，不经过任何第三方。每张约 430 KB。</p>
-<input type="file" id="badge_files" accept="image/*" multiple>
+<input type="file" id="badge_files" accept="image/*" multiple onchange="previewFiles('badge')">
+<div class="chk"><input type="checkbox" id="badge_clock" onchange="redrawAll('badge')"> 预览时叠加时间。拖动图片调整位置，用滑块缩放</div>
+<div id="badge_prev" class="row" style="margin-top:8px"></div>
 <p style="margin:10px 0 0"><button onclick="badgeUpload()">上传所选图片</button></p>
 <div class="st" id="badge_msg"></div>
 <div id="badges" class="row" style="margin-top:8px"></div>
@@ -230,38 +246,128 @@ async function loadVoices() {
   $("voices").innerHTML = d.voices.map((v) => "<option value='" + v.n + "'>" + v.d + "</option>").join("");
   $("msg").textContent = "已载入 " + d.voices.length + " 个音色，点音色框选择";
 }
-const BADGE_MAX = 9, BADGE_SIZE = 466;
-async function badgeToBytes(file) {
-  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  const c = document.createElement("canvas"); c.width = c.height = BADGE_SIZE;
-  const g = c.getContext("2d");
-  const side = Math.min(bmp.width, bmp.height);
-  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, BADGE_SIZE, BADGE_SIZE);
-  g.globalCompositeOperation = "destination-in";   // keep only the round screen, the corners become black below
-  g.beginPath(); g.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2, 0, Math.PI * 2); g.fill();
-  const out = document.createElement("canvas"); out.width = out.height = BADGE_SIZE;
-  const o = out.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, BADGE_SIZE, BADGE_SIZE); o.drawImage(c, 0, 0);
-  const px = o.getImageData(0, 0, BADGE_SIZE, BADGE_SIZE).data;
-  const n = BADGE_SIZE * BADGE_SIZE, buf = new ArrayBuffer(16 + n * 2), dv = new DataView(buf);
-  dv.setUint32(0, 0x3147424d, true); dv.setUint16(4, BADGE_SIZE, true); dv.setUint16(6, BADGE_SIZE, true); dv.setUint32(8, n * 2, true); dv.setUint32(12, 0, true);
-  for (let i = 0; i < n; i++) {
-    const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
-    dv.setUint16(16 + i * 2, ((r & 0xf8) << 8) | ((gg & 0xfc) << 3) | (b >> 3), true);
-  }
+const BADGE_MAX = 9, BADGE_SIZE = 466, AV = 233;
+let DEV = "", DEVS = [], LEGACY = {};
+try { DEV = localStorage.getItem("dev") || ""; } catch (e) {}
+const devQ = () => (DEV ? "&d=" + encodeURIComponent(DEV) : "");
+const kq = () => "k=" + encodeURIComponent(K);
+const ago = (t) => { if (!t) return "还没来过"; const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return s < 90 ? "刚刚" : s < 5400 ? Math.round(s / 60) + " 分钟前" : s < 172800 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前"; };
+
+async function loadDevices() {
+  const r = await fetch("/admin/devices?" + kq()); const d = await r.json();
+  DEVS = d.devices || []; LEGACY = d.legacy || {};
+  const sel = $("dev_sel"); sel.innerHTML = "";
+  for (const x of DEVS) { const o = document.createElement("option"); o.value = x.d; o.textContent = x.name + " · " + ago(x.last_seen); sel.appendChild(o); }
+  const o = document.createElement("option"); o.value = ""; o.textContent = "旧的单套数据（没有设备编号的旧固件用）"; sel.appendChild(o);
+  if (DEV && !DEVS.find((x) => x.d === DEV)) DEV = "";
+  if (!DEV && !(LEGACY.badges || LEGACY.avatar) && DEVS.length) DEV = DEVS[0].d;   // nothing in the older set: start on a real device
+  sel.value = DEV; devInfo();
+}
+function devInfo() {
+  const x = DEVS.find((y) => y.d === DEV);
+  $("dev_info").textContent = x ? x.d + " · 最近在线 " + ago(x.last_seen) + " · " + x.badges + " 张 Badge" + (x.avatar ? "，有头像" : "，没有头像") : "没有设备编号的旧固件取的是这一套。";
+  const showMig = !!DEV && (LEGACY.badges || LEGACY.avatar) && x && !x.badges && !x.avatar;
+  $("dev_migrate").style.display = showMig ? "block" : "none";
+}
+function devChange() { DEV = $("dev_sel").value; try { localStorage.setItem("dev", DEV); } catch (e) {} devInfo(); loadBadges(); avatarShow(); }
+async function devRename() {
+  if (!DEV) { $("dev_msg").textContent = "旧的单套数据没有名字。"; return; }
+  const x = DEVS.find((y) => y.d === DEV); const name = prompt("设备名字", x ? x.name : ""); if (!name) return;
+  const r = await (await fetch("/admin/device?" + kq(), { method: "POST", body: JSON.stringify({ d: DEV, name }) })).json();
+  $("dev_msg").textContent = r.ok ? "已改名。" : (r.error || "失败"); await loadDevices();
+}
+async function devRemove() {
+  if (!DEV) { $("dev_msg").textContent = "旧的单套数据不能在这里删除。"; return; }
+  if (!confirm("删除这台设备，以及它的头像和 Badge 图片？它下次来取图时会重新出现，但图片没了。")) return;
+  const r = await (await fetch("/admin/device?" + kq(), { method: "POST", body: JSON.stringify({ d: DEV, remove: true }) })).json();
+  $("dev_msg").textContent = r.ok ? "已删除。" : (r.error || "失败"); DEV = ""; await loadDevices(); loadBadges(); avatarShow();
+}
+async function devMigrate() {
+  const r = await (await fetch("/admin/migrate?d=" + encodeURIComponent(DEV) + "&" + kq(), { method: "POST" })).json();
+  $("dev_msg").textContent = r.ok ? "已分给这台设备：" + (r.avatar ? "头像，" : "") + r.badges + " 张 Badge。" : (r.error || "失败");
+  await loadDevices(); loadBadges(); avatarShow();
+}
+
+// A picture is shown through the round screen. The crop is kept as a zoom (1 fills the screen with the picture's shorter side;
+// less than 1 shows more of it, with black around) and a centre in the picture's own pixels; dragging moves the centre, the
+// slider changes the zoom. Whatever the editor shows is what is uploaded: renderCrop makes the final square, corners black.
+function newEditor(src, bias) {
+  const w = src.width, h = src.height, side = Math.min(w, h);
+  return { src, zoom: 1, cx: w / 2, cy: (h - side) * bias + side / 2, bias };
+}
+function renderCrop(ed, size) {
+  const w = ed.src.width, h = ed.src.height, side = Math.min(w, h) / ed.zoom, k = size / side;
+  const c = document.createElement("canvas"); c.width = c.height = size;
+  const g = c.getContext("2d"); g.fillStyle = "#000"; g.fillRect(0, 0, size, size);
+  g.drawImage(ed.src, (ed.cx - side / 2) * -k, (ed.cy - side / 2) * -k, w * k, h * k);
+  g.globalCompositeOperation = "destination-in"; g.beginPath(); g.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); g.fill();
+  const out = document.createElement("canvas"); out.width = out.height = size;
+  const o = out.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, size, size); o.drawImage(c, 0, 0);
+  return out;
+}
+function toSlotBytes(canvas, magic) {
+  const size = canvas.width, px = canvas.getContext("2d").getImageData(0, 0, size, size).data;
+  const n = size * size, buf = new ArrayBuffer(16 + n * 2), dv = new DataView(buf);
+  dv.setUint32(0, magic, true); dv.setUint16(4, size, true); dv.setUint16(6, size, true); dv.setUint32(8, n * 2, true); dv.setUint32(12, 0, true);
+  for (let i = 0; i < n; i++) { const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2]; dv.setUint16(16 + i * 2, ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3), true); }
   return buf;
 }
-function badgeThumb(buf, canvas) {
-  const dv = new DataView(buf), w = dv.getUint16(4, true), h = dv.getUint16(6, true);
-  const img = new ImageData(w, h);
-  for (let i = 0; i < w * h; i++) {
-    const v = dv.getUint16(16 + i * 2, true);
-    img.data[i * 4] = ((v >> 11) & 31) * 255 / 31; img.data[i * 4 + 1] = ((v >> 5) & 63) * 255 / 63; img.data[i * 4 + 2] = (v & 31) * 255 / 31; img.data[i * 4 + 3] = 255;
-  }
+function rgb565ToCanvas(buf, canvas) {
+  const dv = new DataView(buf), w = dv.getUint16(4, true), h = dv.getUint16(6, true), img = new ImageData(w, h);
+  for (let i = 0; i < w * h; i++) { const v = dv.getUint16(16 + i * 2, true); img.data[i * 4] = ((v >> 11) & 31) * 255 / 31; img.data[i * 4 + 1] = ((v >> 5) & 63) * 255 / 63; img.data[i * 4 + 2] = (v & 31) * 255 / 31; img.data[i * 4 + 3] = 255; }
   const full = document.createElement("canvas"); full.width = w; full.height = h; full.getContext("2d").putImageData(img, 0, 0);
   canvas.getContext("2d").drawImage(full, 0, 0, canvas.width, canvas.height);
 }
+
+// The editors on the page: one per chosen picture (the avatar takes one, the badge pictures up to nine).
+const EDIT = { av: [], badge: [] };
+const SHOW = 233;   // css px of an editor's round screen: the avatar's real size; a badge picture is 466 px, shown at half size
+function drawEditor(kind, ed) {
+  const cv = ed.cv, g = cv.getContext("2d"), px = SHOW * 2;
+  g.clearRect(0, 0, px, px); g.drawImage(renderCrop(ed, px), 0, 0);
+  if ($(kind + "_clock").checked) {
+    const d = new Date(), hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    g.textAlign = "center"; g.shadowColor = "rgba(0,0,0,.8)"; g.shadowBlur = 14; g.fillStyle = "#fff";
+    g.font = "600 " + Math.round(SHOW * 0.5) + "px -apple-system, sans-serif"; g.fillText(hm, SHOW, SHOW + SHOW * 0.17);
+    g.font = "500 " + Math.round(SHOW * 0.11) + "px -apple-system, sans-serif"; g.fillText((d.getMonth() + 1) + "月" + d.getDate() + "日", SHOW, SHOW + SHOW * 0.38);
+    g.shadowBlur = 0;
+  }
+}
+function redrawAll(kind) { for (const ed of EDIT[kind]) drawEditor(kind, ed); }
+async function previewFiles(kind) {
+  const host = $(kind + "_prev"), files = [...(kind === "av" ? $("av_file").files : $("badge_files").files)].slice(0, kind === "av" ? 1 : BADGE_MAX);
+  host.innerHTML = ""; EDIT[kind] = [];
+  for (const f of files) {
+    const box = document.createElement("div"); box.style.cssText = "flex:0 0 auto;width:" + SHOW + "px";
+    try {
+      const ed = newEditor(await createImageBitmap(f, { imageOrientation: "from-image" }), kind === "av" ? 0.4 : 0.5);
+      ed.name = f.name;
+      const cv = document.createElement("canvas"); cv.width = cv.height = SHOW * 2; ed.cv = cv;
+      cv.style.cssText = "width:" + SHOW + "px;height:" + SHOW + "px;border-radius:50%;border:1px solid var(--line);background:#000;cursor:grab;touch-action:none";
+      let drag = null;
+      cv.onpointerdown = (e) => { drag = { x: e.clientX, y: e.clientY, cx: ed.cx, cy: ed.cy }; cv.setPointerCapture(e.pointerId); cv.style.cursor = "grabbing"; };
+      cv.onpointermove = (e) => { if (!drag) return; const k = Math.min(ed.src.width, ed.src.height) / ed.zoom / SHOW; ed.cx = drag.cx - (e.clientX - drag.x) * k; ed.cy = drag.cy - (e.clientY - drag.y) * k; drawEditor(kind, ed); };
+      cv.onpointerup = cv.onpointercancel = () => { drag = null; cv.style.cursor = "grab"; };
+      cv.onwheel = (e) => { e.preventDefault(); ed.zoom = Math.min(4, Math.max(0.4, ed.zoom * (e.deltaY < 0 ? 1.06 : 1 / 1.06))); sl.value = ed.zoom; drawEditor(kind, ed); };
+      box.appendChild(cv);
+      const sl = document.createElement("input"); sl.type = "range"; sl.min = 0.4; sl.max = 4; sl.step = 0.01; sl.value = 1; sl.style.cssText = "width:100%;margin-top:6px";
+      sl.oninput = () => { ed.zoom = +sl.value; drawEditor(kind, ed); };
+      box.appendChild(sl);
+      const row = document.createElement("div"); row.style.cssText = "display:flex;gap:6px;align-items:center";
+      const rot = document.createElement("button"); rot.textContent = "旋转";
+      rot.onclick = () => { const w = ed.src.width, h = ed.src.height, ox = ed.cx, oy = ed.cy; const s = ed.src, c = document.createElement("canvas"); c.width = h; c.height = w;
+        const g = c.getContext("2d"); g.translate(h, 0); g.rotate(Math.PI / 2); g.drawImage(s, 0, 0); ed.src = c; ed.cx = h - oy; ed.cy = ox; drawEditor(kind, ed); };
+      const rst = document.createElement("button"); rst.textContent = "重置";
+      rst.onclick = () => { const n = newEditor(ed.src, ed.bias); ed.zoom = 1; ed.cx = n.cx; ed.cy = n.cy; sl.value = 1; drawEditor(kind, ed); };
+      const cap = document.createElement("span"); cap.className = "hint"; cap.textContent = f.name.length > 14 ? f.name.slice(0, 12) + "…" : f.name;
+      row.appendChild(rot); row.appendChild(rst); row.appendChild(cap); box.appendChild(row);
+      host.appendChild(box); EDIT[kind].push(ed); drawEditor(kind, ed);
+    } catch (e) { const m = document.createElement("div"); m.className = "hint"; m.textContent = f.name + "：读不了这张图"; box.appendChild(m); host.appendChild(box); }
+  }
+}
+
 async function loadBadges() {
-  const d = await api("/badge/list");
+  const d = await api("/badge/list" + (DEV ? "?d=" + encodeURIComponent(DEV) : ""));
   const items = d.items || [];
   $("badges").innerHTML = "";
   if (!items.length) { $("badges").textContent = "还没有图片。"; return; }
@@ -272,92 +378,61 @@ async function loadBadges() {
     const t = document.createElement("div"); t.className = "hint"; t.textContent = "第 " + (it.n + 1) + " 张 · " + new Date(it.v * 1000).toLocaleString();
     const del = document.createElement("button"); del.textContent = "删除"; del.onclick = () => badgeDelete(it.n);
     box.appendChild(t); box.appendChild(del); $("badges").appendChild(box);
-    fetch("/badge/" + it.n + "?k=" + encodeURIComponent(K)).then((r) => r.arrayBuffer()).then((b) => badgeThumb(b, cv)).catch(() => {});
+    fetch("/badge/" + it.n + "?" + kq() + devQ()).then((r) => r.arrayBuffer()).then((b) => rgb565ToCanvas(b, cv)).catch(() => {});
   }
 }
 async function badgeUpload() {
-  const files = [...$("badge_files").files];
-  if (!files.length) { $("badge_msg").textContent = "先选择图片。"; return; }
-  const used = new Set(((await api("/badge/list")).items || []).map((x) => x.n));
+  const eds = EDIT.badge;
+  if (!eds.length) { $("badge_msg").textContent = "先选择图片。"; return; }
+  const used = new Set(((await api("/badge/list" + (DEV ? "?d=" + encodeURIComponent(DEV) : ""))).items || []).map((x) => x.n));
   let done = 0;
-  for (const f of files) {
+  for (const ed of eds) {
     let n = 0; while (used.has(n) && n < BADGE_MAX) n++;
     if (n >= BADGE_MAX) { $("badge_msg").textContent = "已经有 9 张了，先删掉一些。"; break; }
-    $("badge_msg").textContent = "处理 " + f.name + " …";
+    $("badge_msg").textContent = "上传 " + ed.name + " …";
     try {
-      const buf = await badgeToBytes(f);
-      const r = await fetch("/badge/set?n=" + n + "&k=" + encodeURIComponent(K), { method: "POST", body: buf });
-      const j = await r.json();
+      const buf = toSlotBytes(renderCrop(ed, BADGE_SIZE), 0x3147424d);
+      const j = await (await fetch("/badge/set?n=" + n + "&" + kq() + devQ(), { method: "POST", body: buf })).json();
       if (!j.ok) throw new Error(j.error || "失败");
       used.add(n); done++;
-    } catch (e) { $("badge_msg").textContent = f.name + "：" + e.message; break; }
+    } catch (e) { $("badge_msg").textContent = ed.name + "：" + e.message; break; }
   }
-  if (done) $("badge_msg").textContent = "已上传 " + done + " 张。去圆圆的“设置 → Badge”点同步。";
-  $("badge_files").value = "";
-  loadBadges();
+  if (done) $("badge_msg").textContent = "已上传 " + done + " 张。去设备的“设置 → Badge”点同步。";
+  $("badge_files").value = ""; $("badge_prev").innerHTML = ""; EDIT.badge = [];
+  loadDevices(); loadBadges();
 }
 async function badgeDelete(n) {
-  if (!confirm("删除第 " + (n + 1) + " 张？圆圆下次同步后会去掉它。")) return;
-  await fetch("/badge/delete?n=" + n + "&k=" + encodeURIComponent(K), { method: "POST" });
-  loadBadges();
-}
-const AV = 233;
-async function avatarToBytes(file) {
-  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  const c = document.createElement("canvas"); c.width = c.height = AV;
-  const g = c.getContext("2d");
-  const side = Math.min(bmp.width, bmp.height);
-  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) * 0.4, side, side, 0, 0, AV, AV);   // a little above the middle: faces
-  g.globalCompositeOperation = "destination-in";
-  g.beginPath(); g.arc(AV / 2, AV / 2, AV / 2, 0, Math.PI * 2); g.fill();
-  const out = document.createElement("canvas"); out.width = out.height = AV;
-  const o = out.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, AV, AV); o.drawImage(c, 0, 0);
-  const px = o.getImageData(0, 0, AV, AV).data;
-  const n = AV * AV, buf = new ArrayBuffer(16 + n * 2), dv = new DataView(buf);
-  dv.setUint32(0, 0x3156414d, true); dv.setUint16(4, AV, true); dv.setUint16(6, AV, true); dv.setUint32(8, n * 2, true); dv.setUint32(12, 0, true);
-  for (let i = 0; i < n; i++) {
-    const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
-    dv.setUint16(16 + i * 2, ((r & 0xf8) << 8) | ((gg & 0xfc) << 3) | (b >> 3), true);
-  }
-  return buf;
+  if (!confirm("删除第 " + (n + 1) + " 张？设备下次同步后会去掉它。")) return;
+  await fetch("/badge/delete?n=" + n + "&" + kq() + devQ(), { method: "POST" });
+  loadDevices(); loadBadges();
 }
 async function avatarShow() {
-  const cv = document.getElementById("av_cv"), st = document.getElementById("av_state");
-  const g = cv.getContext("2d"); g.clearRect(0, 0, AV, AV); g.fillStyle = "#000"; g.fillRect(0, 0, AV, AV);
-  const r = await fetch("/avatar/view?k=" + encodeURIComponent(K));
+  const cv = $("av_cv"), st = $("av_state"), g = cv.getContext("2d"); g.clearRect(0, 0, AV, AV); g.fillStyle = "#000"; g.fillRect(0, 0, AV, AV);
+  const r = await fetch("/avatar/view?" + kq() + devQ());
   if (!r.ok) { st.textContent = "还没有头像"; return; }
-  const b = await r.arrayBuffer(), dv = new DataView(b), w = dv.getUint16(4, true), hh = dv.getUint16(6, true);
-  const img = new ImageData(w, hh);
-  for (let i = 0; i < w * hh; i++) {
-    const v = dv.getUint16(16 + i * 2, true);
-    img.data[i * 4] = ((v >> 11) & 31) * 255 / 31; img.data[i * 4 + 1] = ((v >> 5) & 63) * 255 / 63; img.data[i * 4 + 2] = (v & 31) * 255 / 31; img.data[i * 4 + 3] = 255;
-  }
-  g.putImageData(img, 0, 0);
-  st.textContent = "当前头像 " + w + "×" + hh + "，" + Math.round(b.byteLength / 1024) + " KB";
+  const b = await r.arrayBuffer(); rgb565ToCanvas(b, cv);
+  st.textContent = "当前头像 " + new DataView(b).getUint16(4, true) + "×" + new DataView(b).getUint16(6, true) + "，" + Math.round(b.byteLength / 1024) + " KB";
 }
 async function avatarUpload() {
-  const f = document.getElementById("av_file").files[0], m = document.getElementById("av_msg");
-  if (!f) { m.textContent = "先选择一张图片。"; return; }
-  m.textContent = "处理中…";
+  const ed = EDIT.av[0], m = $("av_msg");
+  if (!ed) { m.textContent = "先选择一张图片。"; return; }
+  m.textContent = "上传中…";
   try {
-    const buf = await avatarToBytes(f);
-    const r = await fetch("/avatar/set?k=" + encodeURIComponent(K), { method: "POST", body: buf });
-    const j = await r.json();
+    const buf = toSlotBytes(renderCrop(ed, AV), 0x3156414d);
+    const j = await (await fetch("/avatar/set?" + kq() + devQ(), { method: "POST", body: buf })).json();
     if (!j.ok) throw new Error(j.error || "失败");
-    m.textContent = "已上传。在圆圆上选“设置 → Avatar → Get picture”。";
-    document.getElementById("av_file").value = "";
-    avatarShow();
+    m.textContent = "已上传。在设备上选“设置 → Avatar → Get picture”。";
+    $("av_file").value = ""; $("av_prev").innerHTML = ""; EDIT.av = []; loadDevices(); avatarShow();
   } catch (e) { m.textContent = "失败：" + e.message; }
 }
 async function avatarDelete() {
-  if (!confirm("删除头像图片？圆圆上已取回的那张不受影响，直到下次取回。")) return;
-  await fetch("/avatar/delete?k=" + encodeURIComponent(K), { method: "POST" });
-  avatarShow();
+  if (!confirm("删除头像图片？设备上已取回的那张不受影响，直到下次取回。")) return;
+  await fetch("/avatar/delete?" + kq() + devQ(), { method: "POST" });
+  loadDevices(); avatarShow();
 }
-
+async function lookInit() { await loadDevices(); loadBadges(); avatarShow(); }
 load();
-loadBadges();
-avatarShow();
+lookInit();
 
 const TAB_IDS = ["overview", "voice", "bot", "network", "look"], SAVE_TABS = ["voice", "bot", "network"];
 function showTab(id) {
