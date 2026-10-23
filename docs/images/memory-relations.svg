@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 48 680 466" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 520" role="img">
 <title>Flash、SRAM 和 PSRAM 的关系</title>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
@@ -41,8 +41,8 @@ svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei"
 <text class="ts-teal" x="600" y="156" text-anchor="middle">外挂 · 较慢</text>
 <text class="ts-teal" x="600" y="176" text-anchor="middle">断电丢失</text>
 <text class="ts-teal" x="600" y="202" text-anchor="middle">代码 2.4 MB</text>
-<text class="ts-teal" x="600" y="220" text-anchor="middle">堆已用 1.4 MB</text>
-<text class="ts-teal" x="600" y="238" text-anchor="middle">空闲 4.3 MB</text>
+<text class="ts-teal" x="600" y="220" text-anchor="middle">堆已用 4.6 MB</text>
+<text class="ts-teal" x="600" y="238" text-anchor="middle">空闲 1.1 MB</text>
 <line x1="270" y1="135" x2="270" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
 <line x1="407" y1="135" x2="407" y2="188" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>
 <line x1="470" y1="240" x2="538" y2="240" stroke="#888780" stroke-width="2" marker-end="url(#mg)"/>

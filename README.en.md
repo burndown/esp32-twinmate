@@ -229,6 +229,7 @@ The figures come from a build of 2026-10-22 (after merging upstream e6fe517) and
 - **Deployment fails with Cloudflare error 1010 or a connection error**: access to `workers.dev` can be intermittent on some networks. Run the deployment command again.
 - **`check` says nothing is wrong, but `gateway` fails at once**: look at the error. An empty `[gateway] name` and a wrong account ID are the usual causes.
 - **Cloudflare error 9109 "Cannot use the access token from location"**: the API token has an IP address filter that does not include this machine. Add the address shown by `curl https://www.cloudflare.com/cdn-cgi/trace`, or remove the filter.
+- **The board powers off when the talk key is held for 10 seconds**: on this board the talk key is the PWR key, which is wired to the power-management chip, and the chip cuts power after a 10-second hold whatever the firmware does. Release within 10 seconds. (The firmware can end the turn by itself at 9 seconds; we did that in our own build, and the patch in this repository does not have it yet.)
 - **The bot never replies**: check the Webhook URL, credentials and whether the bot is allowed to reach the callback's Worker hostname.
 
 ## Costs and verification status

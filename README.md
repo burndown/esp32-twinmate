@@ -254,6 +254,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 - **部署时报 Cloudflare 1010 或无法连接**：部分网络访问 `workers.dev` 不稳定，可重新运行部署命令。
 - **`check` 通过，但 `gateway` 马上失败**：看报错信息。`[gateway] name` 为空、账户 ID 填错是最常见的原因。
 - **Cloudflare 错误 9109 “Cannot use the access token from location”**：API 令牌设置了 IP 地址限制，其中不含这台机器。把 `curl https://www.cloudflare.com/cdn-cgi/trace` 显示的地址加进去，或取消该限制。
+- **按住说话键超过 10 秒，板子断电重启**：这块板子上说话键就是 PWR 键，它直接接在电源管理芯片上，按住满 10 秒芯片会硬件断电，固件拦不住。请在 10 秒内松手。（固件可以在 9 秒时自动结束这次说话，我们在自己的构建里做了，本仓库的补丁暂时还没有。）
 - **机器人一直未回复**：先检查 Webhook 地址、授权凭据，以及机器人是否获准访问回调所用的 Worker 域名。
 
 

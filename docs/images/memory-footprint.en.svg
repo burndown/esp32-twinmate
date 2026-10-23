@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 744" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 764" role="img">
 <title>Space used by the firmware</title>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
@@ -73,9 +73,10 @@ svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei"
 <text class="ts" x="40" y="664">PSRAM 8 MB (external, larger, a bit slower)</text>
 <rect class="r-purple" x="40" y="674" width="177" height="28" rx="4" stroke-width="0.5"/>
 <text class="ts-purple" x="128" y="688" text-anchor="middle" dominant-baseline="central">Code + read-only ≈2.4 MB</text>
-<rect class="r-teal" x="217" y="674" width="104" height="28" rx="4" stroke-width="0.5"/>
-<text class="ts-teal" x="269" y="688" text-anchor="middle" dominant-baseline="central">Used 1.4 MB</text>
-<rect class="box" x="321" y="674" width="316" height="28" rx="4" stroke-width="0.5" stroke-dasharray="3 3"/>
-<text class="ts" x="479" y="688" text-anchor="middle" dominant-baseline="central">Free 4.3 MB (about 3.4 MB in a conversation)</text>
-<text class="ts" x="40" y="722">The 2.4 MB is inferred: 8 MB minus the 5.73 MB heap pool</text>
+<rect class="r-teal" x="217" y="674" width="336" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-teal" x="385" y="688" text-anchor="middle" dominant-baseline="central">Heap used 4.6 MB (while talking)</text>
+<rect class="box" x="553" y="674" width="84" height="28" rx="4" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text class="ts" x="595" y="688" text-anchor="middle" dominant-baseline="central">Free 1.1 MB</text>
+<text class="ts" x="40" y="722">Free space varies: 4.3 MB after boot, 3.3 MB once on Muse, 1.1 MB while talking, 1.6 MB after</text>
+<text class="ts" x="40" y="742">The 2.4 MB is inferred: 8 MB minus the 5.73 MB heap pool</text>
 </svg>

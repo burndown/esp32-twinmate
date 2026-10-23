@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 744" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="680" viewBox="0 0 680 764" role="img">
 <title>固件占用的空间</title>
 <style>
 svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",Helvetica,Arial,sans-serif}
@@ -73,9 +73,10 @@ svg{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei"
 <text class="ts" x="40" y="664">PSRAM 8 MB（外挂，大一些，稍慢）</text>
 <rect class="r-purple" x="40" y="674" width="177" height="28" rx="4" stroke-width="0.5"/>
 <text class="ts-purple" x="128" y="688" text-anchor="middle" dominant-baseline="central">代码与只读数据 ≈2.4 MB</text>
-<rect class="r-teal" x="217" y="674" width="104" height="28" rx="4" stroke-width="0.5"/>
-<text class="ts-teal" x="269" y="688" text-anchor="middle" dominant-baseline="central">已用 1.4 MB</text>
-<rect class="box" x="321" y="674" width="316" height="28" rx="4" stroke-width="0.5" stroke-dasharray="3 3"/>
-<text class="ts" x="479" y="688" text-anchor="middle" dominant-baseline="central">空闲 4.3 MB（对话时约 3.4 MB）</text>
-<text class="ts" x="40" y="722">2.4 MB 是推算值：8 MB 减去可分配的堆池 5.73 MB</text>
+<rect class="r-teal" x="217" y="674" width="336" height="28" rx="4" stroke-width="0.5"/>
+<text class="ts-teal" x="385" y="688" text-anchor="middle" dominant-baseline="central">堆已用 4.6 MB（说话时）</text>
+<rect class="box" x="553" y="674" width="84" height="28" rx="4" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text class="ts" x="595" y="688" text-anchor="middle" dominant-baseline="central">空闲 1.1 MB</text>
+<text class="ts" x="40" y="722">空闲量会变：刚开机 4.3 MB，连上 Muse 后 3.3 MB，说话时约 1.1 MB，说完后约 1.6 MB</text>
+<text class="ts" x="40" y="742">2.4 MB 是推算值：8 MB 减去可分配的堆池 5.73 MB</text>
 </svg>
