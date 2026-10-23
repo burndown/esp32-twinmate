@@ -5,6 +5,8 @@
 //   POST /bot-reply/<id>/<token>            the bot's answer (one-time token, no gateway token)
 //   POST /wg/enroll, GET /wg/peers          a device asks for a WireGuard tunnel; a person approves it on the server
 //   POST /avatar, /avatar/set               the picture for the round screen
+//   GET /badge/list, /badge/<n>             the badge pictures the device copies into its badge partition (device token)
+//   POST /badge/set?n=N, /badge/delete?n=N  put or remove one (admin token); the admin page does it from the browser
 //   GET  /admin?k=...                       the settings page
 // Two tokens: GATEWAY_TOKEN (devices) and ADMIN_TOKEN (the settings page, /wg/peers, /avatar/set, /health).
 // Limits: /stt 2 MB, /tts 600 characters, /chat 1000 characters, avatar 120 KB (413 beyond that).
@@ -43,6 +45,8 @@ const MAX_PCM = 2 * 1024 * 1024;     // 60 s of 16 kHz PCM is 1.9 MB, which is a
 const MAX_TTS_CHARS = 600;           // the firmware sends at most 480 bytes at a time
 const MAX_CHAT_CHARS = 1000;
 const MAX_AVATAR = 120 * 1024;       // 233x233 RGB565 is 108 KB
+const MAX_BADGES = 9;                // the badge partition holds 4 MB in slots of 0x70000 bytes
+const MAX_BADGE = 0x70000;           // 466 x 466 RGB565 plus the 16-byte header fits one slot
 const MAX_PENDING_PEERS = 20;        // device keys that asked for a tunnel and nobody has approved yet
 const tooLarge = () => json({ error: "too large" }, 413);
 // A /chat reply is plain text that gets spoken. When the bot fails, the rest of the reply is not an answer: it starts with this
@@ -53,7 +57,7 @@ const ERR = "\u0001";
 // GATEWAY_TOKEN is in every device's firmware (whoever holds a device holds it) and opens only what a device needs.
 // ADMIN_TOKEN stays in your browser and opens the settings page and the other management routes. Without ADMIN_TOKEN the device
 // token still opens them (an old deployment keeps working) and the settings page says so.
-const isAdminPath = (p) => p.startsWith("/admin") || p === "/wg/peers" || p === "/avatar/set" || p === "/health";
+const isAdminPath = (p) => p.startsWith("/admin") || p === "/wg/peers" || p === "/avatar/set" || p === "/avatar/view" || p === "/avatar/delete" || p === "/health" || p === "/badge/set" || p === "/badge/delete";
 const givenToken = (req, url) => url.searchParams.get("k") || (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
 
 // Azure Speech host for a region name ("eastasia"), or a full "<region>.tts.speech.microsoft.com" / ".azure.cn" host; nothing else,
@@ -443,6 +447,61 @@ async function avatarSet(req, env) {
   await env.CFG.put("avatar", b);
   return json({ ok: true, w, h, bytes: n });
 }
+// The settings page shows and removes the picture (admin token); the device asks with POST /avatar (device token).
+async function avatarView(env) {
+  return await avatarGet(env);
+}
+async function avatarDelete(env) {
+  await env.CFG.delete("avatar");
+  return json({ ok: true });
+}
+
+// ---- badge pictures ---------------------------------------------------------------------------------
+// Up to MAX_BADGES full-screen pictures. Each is stored as the exact bytes the device keeps in a badge slot: a 16-byte header
+// ("MBG1", width, height, byte count, version) + RGB565 little-endian pixels. The browser makes them (admin page), so nothing
+// here needs an image library. The version is a number the Worker puts in the header's last four bytes when the picture is stored;
+// the device copies a picture again only when its version differs from the one in its slot.
+// KV: "badge:<n>" = the picture, "badges" = a JSON list [{n, v, w, h, bytes}] in slot order.
+async function badgeIndex(env) {
+  const l = env.CFG ? await env.CFG.get("badges", "json").catch(() => null) : null;
+  return Array.isArray(l) ? l : [];
+}
+async function badgeList(env) {
+  return json({ items: await badgeIndex(env) });
+}
+async function badgeGet(env, n) {
+  if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "no such picture" }, 404);
+  const b = env.CFG && (await env.CFG.get("badge:" + n, "arrayBuffer"));
+  if (!b) return json({ error: "no such picture" }, 404);
+  return new Response(b, { headers: { "content-type": "application/octet-stream", "content-length": String(b.byteLength) } });
+}
+async function badgeSet(req, env, url) {
+  const n = parseInt(url.searchParams.get("n"), 10);
+  if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "n must be 0.." + (MAX_BADGES - 1) }, 400);
+  if ((+req.headers.get("content-length") || 0) > MAX_BADGE) return tooLarge();
+  const b = await req.arrayBuffer();
+  if (b.byteLength > MAX_BADGE) return tooLarge();
+  const v = new DataView(b);
+  if (b.byteLength < 16 || v.getUint32(0, true) !== 0x3147424d) return json({ error: "not an MBG1 picture" }, 400);
+  const w = v.getUint16(4, true), h = v.getUint16(6, true), bytes = v.getUint32(8, true);
+  if (w < 16 || h < 16 || w > 466 || h > 466 || bytes !== w * h * 2 || b.byteLength !== 16 + bytes) return json({ error: "bad size" }, 400);
+  const items = (await badgeIndex(env)).filter((x) => x.n !== n);
+  const ver = (Date.now() / 1000) >>> 0 || 1;   // seconds since 1970: changes whenever the picture is stored again
+  v.setUint32(12, ver, true);
+  await env.CFG.put("badge:" + n, b);
+  items.push({ n, v: ver, w, h, bytes });
+  items.sort((a, c) => a.n - c.n);
+  await env.CFG.put("badges", JSON.stringify(items));
+  return json({ ok: true, n, v: ver, w, h, bytes });
+}
+async function badgeDelete(req, env, url) {
+  const n = parseInt(url.searchParams.get("n"), 10);
+  if (!Number.isInteger(n) || n < 0 || n >= MAX_BADGES) return json({ error: "n must be 0.." + (MAX_BADGES - 1) }, 400);
+  const items = (await badgeIndex(env)).filter((x) => x.n !== n);
+  await env.CFG.delete("badge:" + n);
+  await env.CFG.put("badges", JSON.stringify(items));
+  return json({ ok: true });
+}
 
 // ---- settings page -------------------------------------------------------------------------------------
 const mask = (v) => (v ? "已设置 ••••" + v.slice(-4) : "");
@@ -540,18 +599,27 @@ export default {
     const url = new URL(req.url);
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the bot calls this: a one-time token, not the gateway token
     const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
-    if (!want || !(await safeEq(givenToken(req, url), want))) return text("forbidden", 403);
+    let allowed = !!want && (await safeEq(givenToken(req, url), want));
+    // The settings page (admin token) also reads the badge pictures the device reads (device token) to show them.
+    if (!allowed && env.ADMIN_TOKEN && req.method === "GET" && /^\/badge\/(list|\d)$/.test(url.pathname)) allowed = await safeEq(givenToken(req, url), env.ADMIN_TOKEN);
+    if (!allowed) return text("forbidden", 403);
     const all = await loadAll(env);
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
       if (url.pathname === "/wg/peers" && req.method === "GET") return text((await wgList(env, all.cfg.wg)).map((p) => p.cmd + "   # asked " + p.at + (p.ok ? " (approved)" : "")).join("\n") + "\n");
       if (url.pathname === "/health") return json({ ok: true, asr: all.cfg.asr.provider, tts: "azure:" + all.cfg.tts.voice, bot: !!(all.S.grokbot_url && all.S.grokbot_auth), wg: !!(all.cfg.wg.server_pub && all.cfg.wg.endpoint) });
+      if (url.pathname === "/badge/list" && req.method === "GET") return await badgeList(env);
+      if (/^\/badge\/\d$/.test(url.pathname) && req.method === "GET") return await badgeGet(env, parseInt(url.pathname.slice(7), 10));
+      if (url.pathname === "/avatar/view" && req.method === "GET") return await avatarView(env);
       if (req.method !== "POST") return text("method", 405);
+      if (url.pathname === "/badge/set") return await badgeSet(req, env, url);
+      if (url.pathname === "/badge/delete") return await badgeDelete(req, env, url);
       if (url.pathname === "/stt") return await stt(req, env, all);
       if (url.pathname === "/tts") return await tts(req, env, all);
       if (url.pathname === "/chat") return await chat(req, env, all);
       if (url.pathname === "/wg/enroll") return await wgEnroll(req, env, all);
       if (url.pathname === "/avatar") return await avatarGet(env);
+      if (url.pathname === "/avatar/delete") return await avatarDelete(env);
       if (url.pathname === "/avatar/set") return await avatarSet(req, env);
       return text("not found", 404);
     } catch (e) {

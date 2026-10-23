@@ -14,8 +14,9 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 | `POST /bot-reply/<id>/<token>` | the bot | The bot sends its answer here. The token is one-time and the gateway token is not needed; the id is signed, so a forged request is refused before it touches any storage |
 | `POST /wg/enroll` | device | The device sends its own WireGuard public key and gets the server details and a tunnel address |
 | `POST /avatar` | device | Downloads the round picture you put on the gateway |
+| `GET /badge/list`, `GET /badge/<n>` | device (the settings page reads them with the admin token) | The badge pictures the device copies into its badge partition (Settings > Badge > Sync) |
 | `GET /admin?k=…` | you | The settings page |
-| `/admin/api`, `/admin/wg`, `/admin/test`, `/admin/voices`, `GET /wg/peers`, `POST /avatar/set`, `GET /health` | you | Management calls |
+| `/admin/api`, `/admin/wg`, `/admin/test`, `/admin/voices`, `GET /wg/peers`, `POST /avatar/set`, `GET /avatar/view`, `POST /avatar/delete`, `POST /badge/set?n=N`, `POST /badge/delete?n=N`, `GET /health` | you | Management calls |
 
 ## Two tokens
 
@@ -32,6 +33,8 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 - **Speech recognition**: Cloudflare Workers AI (Whisper large-v3-turbo, free, no key) or Azure Speech, and the language.
 - **Speech synthesis**: the Azure region, the voice (the full list of several hundred voices can be fetched), and the Azure Speech key.
 - **Grok Bot**: the Webhook address and the authorisation (stored as secrets; the page shows only the last four characters), an optional callback host name, and a "Test Grok Bot" button (it really asks the bot a question). Add the host name shown on the page to the bot's list of outside addresses it may call.
+- **Avatar**: the picture avatar of the round screen. Choose a photo; your browser crops it to a centred square, scales it to 233×233, blacks out the corners and sends it. On the device: Settings > Avatar > Get picture.
+- **Badge pictures**: up to 9 full-screen pictures (466×466, about 430 KB each, made in your browser the same way). On the device: Settings > Badge > Sync with gateway, or hold a picture for a second and a half. Only the pictures whose version changed are copied; a picture you delete here disappears from the device at its next sync. The Badge page needs a build with the badge partition (`partitions_muse_badge.csv`).
 - **WireGuard**: the server's public key, address, port and the tunnel's address prefix. Below that are the devices that asked for a tunnel, each with a `wg set` command and a "copy command" button. Running that command on the WireGuard server approves the device; then press "mark as approved". "Revoke and free the address" releases its tunnel address. The page stores no private key.
 
 Saving merges by section, so only the section you changed is changed. **A saved change takes up to about a minute to take effect**, because Cloudflare KV reads are cached. Keys saved on the page are kept in the KV of your own Cloudflare account (as plain text; the page shows only the last four characters). A stricter way is `wrangler secret put AZURE_SPEECH_KEY`, `GROKBOT_URL`, `GROKBOT_AUTH` (the gateway reads these environment variables too, and the WireGuard server details can be given as `WG_SERVER_PUB`, `WG_ENDPOINT`, `WG_PORT`, `WG_SUBNET`).

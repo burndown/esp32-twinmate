@@ -99,6 +99,29 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 </div>
 </div>
 
+<div class="card">
+<h2>Badge 图片</h2>
+<p class="hint" style="margin-top:6px">最多 9 张全屏图片，圆圆在“设置 → Badge”里点“同步”就会取回。图片在你自己的浏览器里缩成 466×466（居中裁成正方形，圆屏外的四角涂黑）再上传，不经过任何第三方。每张约 430 KB。</p>
+<input type="file" id="badge_files" accept="image/*" multiple>
+<p style="margin:10px 0 0"><button onclick="badgeUpload()">上传所选图片</button></p>
+<div class="st" id="badge_msg"></div>
+<div id="badges" class="row" style="margin-top:8px"></div>
+</div>
+
+<div class="card">
+<h2>头像</h2>
+<p class="hint" style="margin-top:6px">圆圆主屏上的图片头像（在设备上选“设置 → Avatar → Get picture”取回，再选 Picture）。图片在你自己的浏览器里缩成 233×233（居中裁成正方形，圆外涂黑）再上传，不经过任何第三方。</p>
+<div class="row" style="align-items:center">
+ <div style="flex:0 0 130px"><canvas id="av_cv" width="233" height="233" style="width:120px;height:120px;border-radius:50%;border:1px solid var(--line);background:#000"></canvas></div>
+ <div>
+  <div class="st" id="av_state" style="color:var(--mute)">读取中…</div>
+  <input type="file" id="av_file" accept="image/*">
+  <p style="margin:10px 0 0"><button onclick="avatarUpload()">上传头像</button> <button onclick="avatarDelete()">删除头像</button></p>
+  <div class="st" id="av_msg"></div>
+ </div>
+</div>
+</div>
+
 <div class="bar"><span id="msg">保存后最多约一分钟生效（Cloudflare KV 的读取有缓存）</span><button class="pri" id="save" onclick="save()">保存</button></div>
 
 <script>
@@ -180,7 +203,134 @@ async function loadVoices() {
   $("voices").innerHTML = d.voices.map((v) => "<option value='" + v.n + "'>" + v.d + "</option>").join("");
   $("msg").textContent = "已载入 " + d.voices.length + " 个音色，点音色框选择";
 }
+const BADGE_MAX = 9, BADGE_SIZE = 466;
+async function badgeToBytes(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const c = document.createElement("canvas"); c.width = c.height = BADGE_SIZE;
+  const g = c.getContext("2d");
+  const side = Math.min(bmp.width, bmp.height);
+  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, BADGE_SIZE, BADGE_SIZE);
+  g.globalCompositeOperation = "destination-in";   // keep only the round screen, the corners become black below
+  g.beginPath(); g.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2, 0, Math.PI * 2); g.fill();
+  const out = document.createElement("canvas"); out.width = out.height = BADGE_SIZE;
+  const o = out.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, BADGE_SIZE, BADGE_SIZE); o.drawImage(c, 0, 0);
+  const px = o.getImageData(0, 0, BADGE_SIZE, BADGE_SIZE).data;
+  const n = BADGE_SIZE * BADGE_SIZE, buf = new ArrayBuffer(16 + n * 2), dv = new DataView(buf);
+  dv.setUint32(0, 0x3147424d, true); dv.setUint16(4, BADGE_SIZE, true); dv.setUint16(6, BADGE_SIZE, true); dv.setUint32(8, n * 2, true); dv.setUint32(12, 0, true);
+  for (let i = 0; i < n; i++) {
+    const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+    dv.setUint16(16 + i * 2, ((r & 0xf8) << 8) | ((gg & 0xfc) << 3) | (b >> 3), true);
+  }
+  return buf;
+}
+function badgeThumb(buf, canvas) {
+  const dv = new DataView(buf), w = dv.getUint16(4, true), h = dv.getUint16(6, true);
+  const img = new ImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const v = dv.getUint16(16 + i * 2, true);
+    img.data[i * 4] = ((v >> 11) & 31) * 255 / 31; img.data[i * 4 + 1] = ((v >> 5) & 63) * 255 / 63; img.data[i * 4 + 2] = (v & 31) * 255 / 31; img.data[i * 4 + 3] = 255;
+  }
+  const full = document.createElement("canvas"); full.width = w; full.height = h; full.getContext("2d").putImageData(img, 0, 0);
+  canvas.getContext("2d").drawImage(full, 0, 0, canvas.width, canvas.height);
+}
+async function loadBadges() {
+  const d = await api("/badge/list");
+  const items = d.items || [];
+  $("badges").innerHTML = "";
+  if (!items.length) { $("badges").textContent = "还没有图片。"; return; }
+  for (const it of items) {
+    const box = document.createElement("div"); box.style.cssText = "flex:0 0 120px;text-align:center";
+    const cv = document.createElement("canvas"); cv.width = cv.height = 110; cv.style.cssText = "border-radius:50%;border:1px solid var(--line);background:#000";
+    box.appendChild(cv);
+    const t = document.createElement("div"); t.className = "hint"; t.textContent = "第 " + (it.n + 1) + " 张 · " + new Date(it.v * 1000).toLocaleString();
+    const del = document.createElement("button"); del.textContent = "删除"; del.onclick = () => badgeDelete(it.n);
+    box.appendChild(t); box.appendChild(del); $("badges").appendChild(box);
+    fetch("/badge/" + it.n + "?k=" + encodeURIComponent(K)).then((r) => r.arrayBuffer()).then((b) => badgeThumb(b, cv)).catch(() => {});
+  }
+}
+async function badgeUpload() {
+  const files = [...$("badge_files").files];
+  if (!files.length) { $("badge_msg").textContent = "先选择图片。"; return; }
+  const used = new Set(((await api("/badge/list")).items || []).map((x) => x.n));
+  let done = 0;
+  for (const f of files) {
+    let n = 0; while (used.has(n) && n < BADGE_MAX) n++;
+    if (n >= BADGE_MAX) { $("badge_msg").textContent = "已经有 9 张了，先删掉一些。"; break; }
+    $("badge_msg").textContent = "处理 " + f.name + " …";
+    try {
+      const buf = await badgeToBytes(f);
+      const r = await fetch("/badge/set?n=" + n + "&k=" + encodeURIComponent(K), { method: "POST", body: buf });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "失败");
+      used.add(n); done++;
+    } catch (e) { $("badge_msg").textContent = f.name + "：" + e.message; break; }
+  }
+  if (done) $("badge_msg").textContent = "已上传 " + done + " 张。去圆圆的“设置 → Badge”点同步。";
+  $("badge_files").value = "";
+  loadBadges();
+}
+async function badgeDelete(n) {
+  if (!confirm("删除第 " + (n + 1) + " 张？圆圆下次同步后会去掉它。")) return;
+  await fetch("/badge/delete?n=" + n + "&k=" + encodeURIComponent(K), { method: "POST" });
+  loadBadges();
+}
+const AV = 233;
+async function avatarToBytes(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const c = document.createElement("canvas"); c.width = c.height = AV;
+  const g = c.getContext("2d");
+  const side = Math.min(bmp.width, bmp.height);
+  g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) * 0.4, side, side, 0, 0, AV, AV);   // a little above the middle: faces
+  g.globalCompositeOperation = "destination-in";
+  g.beginPath(); g.arc(AV / 2, AV / 2, AV / 2, 0, Math.PI * 2); g.fill();
+  const out = document.createElement("canvas"); out.width = out.height = AV;
+  const o = out.getContext("2d"); o.fillStyle = "#000"; o.fillRect(0, 0, AV, AV); o.drawImage(c, 0, 0);
+  const px = o.getImageData(0, 0, AV, AV).data;
+  const n = AV * AV, buf = new ArrayBuffer(16 + n * 2), dv = new DataView(buf);
+  dv.setUint32(0, 0x3156414d, true); dv.setUint16(4, AV, true); dv.setUint16(6, AV, true); dv.setUint32(8, n * 2, true); dv.setUint32(12, 0, true);
+  for (let i = 0; i < n; i++) {
+    const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+    dv.setUint16(16 + i * 2, ((r & 0xf8) << 8) | ((gg & 0xfc) << 3) | (b >> 3), true);
+  }
+  return buf;
+}
+async function avatarShow() {
+  const cv = document.getElementById("av_cv"), st = document.getElementById("av_state");
+  const g = cv.getContext("2d"); g.clearRect(0, 0, AV, AV); g.fillStyle = "#000"; g.fillRect(0, 0, AV, AV);
+  const r = await fetch("/avatar/view?k=" + encodeURIComponent(K));
+  if (!r.ok) { st.textContent = "还没有头像"; return; }
+  const b = await r.arrayBuffer(), dv = new DataView(b), w = dv.getUint16(4, true), hh = dv.getUint16(6, true);
+  const img = new ImageData(w, hh);
+  for (let i = 0; i < w * hh; i++) {
+    const v = dv.getUint16(16 + i * 2, true);
+    img.data[i * 4] = ((v >> 11) & 31) * 255 / 31; img.data[i * 4 + 1] = ((v >> 5) & 63) * 255 / 63; img.data[i * 4 + 2] = (v & 31) * 255 / 31; img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  st.textContent = "当前头像 " + w + "×" + hh + "，" + Math.round(b.byteLength / 1024) + " KB";
+}
+async function avatarUpload() {
+  const f = document.getElementById("av_file").files[0], m = document.getElementById("av_msg");
+  if (!f) { m.textContent = "先选择一张图片。"; return; }
+  m.textContent = "处理中…";
+  try {
+    const buf = await avatarToBytes(f);
+    const r = await fetch("/avatar/set?k=" + encodeURIComponent(K), { method: "POST", body: buf });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "失败");
+    m.textContent = "已上传。在圆圆上选“设置 → Avatar → Get picture”。";
+    document.getElementById("av_file").value = "";
+    avatarShow();
+  } catch (e) { m.textContent = "失败：" + e.message; }
+}
+async function avatarDelete() {
+  if (!confirm("删除头像图片？圆圆上已取回的那张不受影响，直到下次取回。")) return;
+  await fetch("/avatar/delete?k=" + encodeURIComponent(K), { method: "POST" });
+  avatarShow();
+}
+
 load();
+loadBadges();
+avatarShow();
 </script>
 </body>
 </html>

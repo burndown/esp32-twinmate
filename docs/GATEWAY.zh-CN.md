@@ -14,8 +14,9 @@
 | `POST /bot-reply/<id>/<令牌>` | 机器人 | 机器人把答案送回来。一次性令牌，不需要网关令牌；id 带签名，伪造的请求在碰到存储之前就被拒绝 |
 | `POST /wg/enroll` | 设备 | 设备提交自己的 WireGuard 公钥，得到服务器信息和隧道地址 |
 | `POST /avatar` | 设备 | 下载你放在网关上的圆形图 |
+| `GET /badge/list`、`GET /badge/<n>` | 设备（设置页用管理令牌读取它们） | 设备复制进 badge 分区的 Badge 图片（设置 → Badge → Sync） |
 | `GET /admin?k=…` | 你 | 设置页 |
-| `/admin/api`、`/admin/wg`、`/admin/test`、`/admin/voices`、`GET /wg/peers`、`POST /avatar/set`、`GET /health` | 你 | 管理接口 |
+| `/admin/api`、`/admin/wg`、`/admin/test`、`/admin/voices`、`GET /wg/peers`、`POST /avatar/set`、`GET /avatar/view`、`POST /avatar/delete`、`POST /badge/set?n=N`、`POST /badge/delete?n=N`、`GET /health` | 你 | 管理接口 |
 
 ## 两个令牌
 
@@ -32,6 +33,8 @@
 - **语音识别**：Cloudflare Workers AI（Whisper large-v3-turbo，免费、不要密钥）或 Azure Speech，和语言。
 - **语音合成**：Azure 的区域、音色（可以拉取完整的几百个音色）、Azure Speech 密钥。
 - **Grok Bot**：Webhook 地址和授权（存成密钥，页面只显示末四位）、可选的回调域名，以及“测试 Grok Bot”按钮（会真的问它一句）。机器人的“允许访问的外部地址”里要加上页面里显示的这个网关的域名。
+- **头像**：圆屏上的图片头像。选一张照片，浏览器把它居中裁成正方形、缩成 233×233、涂黑圆外的四角再上传。在设备上选“设置 → Avatar → Get picture”。
+- **Badge 图片**：最多 9 张全屏图片（466×466，每张约 430 KB，同样在浏览器里处理）。在设备上选“设置 → Badge → Sync with gateway”，或在图片上按住一秒半。只复制版本变了的图片；在这里删掉的图片，设备下次同步后也会消失。Badge 页需要带 badge 分区（`partitions_muse_badge.csv`）的固件。
 - **WireGuard**：服务器公钥、地址、端口、隧道网段；下面列出申请过隧道的设备，每个设备一行 `wg set` 命令和“复制命令”按钮，你把它在 WireGuard 服务器上执行就是批准，再点“标记为已批准”；“吊销并释放地址”会释放它的隧道地址。页面里不存任何私钥。
 
 保存是按段合并的，只改你改的那一段。**保存后最多约一分钟生效**：Cloudflare KV 的读取有缓存。页面保存的密钥放在你自己 Cloudflare 账号的 KV 里（明文），页面只显示末四位；更严格的做法是用 `wrangler secret put AZURE_SPEECH_KEY`、`GROKBOT_URL`、`GROKBOT_AUTH`（WireGuard 的服务器信息也可以用 `WG_SERVER_PUB`、`WG_ENDPOINT`、`WG_PORT`、`WG_SUBNET`）。
