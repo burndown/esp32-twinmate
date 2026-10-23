@@ -389,15 +389,15 @@ def cmd_firmware(a):
     # Always start from the pristine upstream commit and apply the patch again: whatever an earlier run left (or you edited by hand
     # in this folder) is discarded. Ignored folders (esp32/build, managed_components) are kept, so a rebuild stays fast.
     run(["git", "reset", "-q", "--hard", "--no-recurse-submodules"], cwd=src, quiet=True)
-    run(["git", "checkout", "-q", "--force", f.get("upstream_commit", "fa07304")], cwd=src, quiet=True)
-    run(["git", "reset", "-q", "--hard", f.get("upstream_commit", "fa07304")], cwd=src, quiet=True)
+    run(["git", "checkout", "-q", "--force", f.get("upstream_commit", "e6fe517")], cwd=src, quiet=True)
+    run(["git", "reset", "-q", "--hard", f.get("upstream_commit", "e6fe517")], cwd=src, quiet=True)
     run(["git", "clean", "-fdq"], cwd=src, quiet=True)
     patch = os.path.join(ROOT, "firmware", "muse-cloud.patch")
     run(["git", "apply", "--check", patch], cwd=src)
     run(["git", "apply", patch], cwd=src)
     if not os.path.exists(os.path.join(src, "esp32", "components", "muse", "muse_wg.c")):
         sys.exit("the patch did not apply completely: delete the folder %s and try again" % os.path.relpath(src, ROOT))
-    print("applied firmware/muse-cloud.patch to upstream", f.get("upstream_commit", "fa07304"))
+    print("applied firmware/muse-cloud.patch to upstream", f.get("upstream_commit", "e6fe517"))
     ov = os.path.join(work, "my-cloud.defaults")
     fd = os.open(ov, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
@@ -409,7 +409,7 @@ def cmd_firmware(a):
     if not os.path.exists(os.path.join(idf, "export.sh")):
         sys.exit("ESP-IDF 6.0.1 is not at %s: install it (https://docs.espressif.com/projects/esp-idf/en/v6.0.1/esp32s3/get-started/) "
                  "or set [firmware] idf_path" % idf)
-    defaults = ";".join(["sdkconfig.defaults", "devices/sdkconfig.muse", "devices/sdkconfig.muse-waveshare-s3-175c", ov])
+    defaults = ";".join(["sdkconfig.defaults", "devices/sdkconfig.muse", "devices/sdkconfig.muse-waveshare-s3-175c", "devices/sdkconfig.ram", "devices/sdkconfig.badge", ov])
     script = ". %s >/dev/null 2>&1 && cd %s && idf.py -B build -DIDF_TARGET=esp32s3 -DSDKCONFIG=build/sdkconfig -DSDKCONFIG_DEFAULTS=%s build" % (
         shlex.quote(os.path.join(idf, "export.sh")), shlex.quote(os.path.join(src, "esp32")), shlex.quote(defaults))
     # build/sdkconfig keeps the values of an earlier run (and the build settings never override it): start from the settings in muse-cloud.toml every time

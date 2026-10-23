@@ -58,7 +58,7 @@ With `tools/muse-cloud.py` these are generated from `muse-cloud.toml`; you do no
 
 ```bash
 git clone https://github.com/facebookincubator/muse-gadget-sdk.git
-cd muse-gadget-sdk && git checkout fa07304
+cd muse-gadget-sdk && git checkout e6fe517
 git apply /path/to/esp32-twinmate/firmware/muse-cloud.patch
 ```
 

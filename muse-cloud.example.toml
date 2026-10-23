@@ -61,7 +61,7 @@ private_key = ""
 idf_path = "~/esp/esp-idf-v6.0.1"
 # The upstream Muse firmware this patch is made for. Do not change the commit unless you rebuild the patch.
 upstream = "https://github.com/facebookincubator/muse-gadget-sdk.git"
-upstream_commit = "fa07304"
+upstream_commit = "e6fe517"
 # Where the sources and the build go (inside this repository's folder; ignored by git).
 workdir = "build"
 # false: Settings > Answers offers only Muse and the Grok Bot, and a failure is shown as an error. Keep false: true needs a gateway with a language model, which is not part of this repository.

@@ -280,6 +280,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 
 | 场景 | 状态 |
 |---|---|
+| 在干净的上游 `e6fe517` 上应用补丁并用脚本编译（含 Badge、设备编号、蓝牙按需等） | 已通过（只编译，没有刷机） |
 | 在干净的上游 `fa07304` 上应用补丁，从配置生成设置并编译 | 已通过，包含启用 WireGuard 的编译组合 |
 | 脚本 `init`、`check`、`gateway`、`status`、`firmware` | 已通过，包含真实 Cloudflare 免费账号部署；测试 Worker 已删除 |
 | 使用脚本刷写后，完成 Muse 语音交互 | 已通过，识别使用 Cloudflare Whisper，合成使用 Azure，WireGuard 关闭 |
@@ -298,7 +299,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 
 ## 这个仓库里的固件补丁停在哪里
 
-`firmware/muse-cloud.patch` 仍是针对上游 `fa07304` 的版本。作者自己的设备上已经在跑一个合入了上游 `e6fe517` 的更新版本，其中下面这些固件功能还没有进入本仓库的补丁：Badge 页和从网关同步图片、设备编号（`d=`）、头像取回后立即刷新和铺满整屏（`CONFIG_MUSE_PHOTO_FILL`）、蓝牙按需启动（`CONFIG_MUSE_BLE_ON_DEMAND`）、说话键按住 9 秒自动结束（1.75C 的说话键是 PWR 键，电源芯片按住 10 秒会硬件断电）、省内部 RAM 的配置，以及时钟、计时器等页面。网关一侧（`worker/` 和管理页）已经包含这些功能的接口，所以用本仓库的补丁编出的固件还没有 Badge 菜单，但不会因此出错。把这些功能整理进补丁需要重新生成基线，计划单独做。
+`firmware/muse-cloud.patch` 现在针对上游 `e6fe517`，包含：Badge 页和从网关同步图片、设备编号（`d=`）、头像取回后立即刷新和铺满整屏（`CONFIG_MUSE_PHOTO_FILL`，载入时放大一次）、蓝牙按需启动（`CONFIG_MUSE_BLE_ON_DEMAND`）、说话键按住 9 秒自动结束（1.75C 的说话键是 PWR 键，电源芯片按住 10 秒会硬件断电）和省内部 RAM 的配置。它在干净的上游上应用并编译通过（不含刷机验证）；这些功能的运行验证来自作者设备上同一份代码的构建。时钟、计时器等 StopWatch 专用页面不在补丁里。
 
 ## 仓库结构
 
@@ -307,7 +308,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 | `muse-cloud.example.toml` | 网关和固件的统一配置模板 |
 | `tools/muse-cloud.py` | 配置检查、网关部署、固件编译与刷写工具 |
 | `worker/` | Cloudflare 网关：语音识别、合成、机器人转发、WireGuard 登记、头像和管理页面 |
-| `firmware/muse-cloud.patch` | 针对上游提交 `fa07304` 的固件补丁 |
+| `firmware/muse-cloud.patch` | 针对上游提交 `e6fe517` 的固件补丁 |
 | `docs/` | [网关说明](docs/GATEWAY.zh-CN.md) · [固件说明](docs/FIRMWARE.zh-CN.md) · [WireGuard 服务器配置](docs/wireguard-server.zh-CN.md) · [验证记录](docs/VALIDATION.zh-CN.md) |
 
 固件和网关放在同一仓库中，便于同步维护接口和协议。编译时请使用仓库指定的上游提交，并配套使用同一版本的固件补丁和网关代码。

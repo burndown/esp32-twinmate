@@ -253,6 +253,7 @@ The following status is summarised from existing test records dated 2026-10-21:
 
 | Scenario | Status |
 |---|---|
+| Apply the patch to clean upstream `e6fe517` and build with the tool (Badge, device id, Bluetooth on demand and the rest) | Passed (build only, not flashed) |
 | Apply the patch to clean upstream `fa07304`, generate settings and build | Passed, including a build with WireGuard enabled |
 | Tool commands `init`, `check`, `gateway`, `status`, `firmware` | Passed, including deployment to a real free Cloudflare account; the test Worker was deleted |
 | Flash with the tool and complete a Muse voice interaction | Passed with Cloudflare Whisper recognition, Azure synthesis and WireGuard disabled |
@@ -271,7 +272,7 @@ See the [validation record](docs/VALIDATION.md) for measurements, the initial fa
 
 ## Where the firmware patch in this repository stands
 
-`firmware/muse-cloud.patch` is still the one for upstream `fa07304`. The author's own device now runs a newer build merged with upstream `e6fe517`, and these firmware features are not in this repository's patch yet: the Badge page and its sync from the gateway, the device id (`d=`), reloading the avatar at once after a fetch and filling the whole screen (`CONFIG_MUSE_PHOTO_FILL`), Bluetooth only on demand (`CONFIG_MUSE_BLE_ON_DEMAND`), ending a turn after 9 seconds of holding the talk key (on the 1.75C the talk key is the PWR key, and the power chip cuts power after 10 seconds of holding it), the internal-RAM savings configuration, and the clock and timer pages. The gateway side (`worker/` and the admin page) already has the calls for them, so a firmware built from this repository's patch has no Badge menu yet but nothing breaks. Folding them into the patch means regenerating the base, which is planned separately.
+`firmware/muse-cloud.patch` is now for upstream `e6fe517` and contains: the Badge page and its sync from the gateway, the device id (`d=`), reloading the avatar at once after a fetch and filling the whole screen (`CONFIG_MUSE_PHOTO_FILL`, enlarged once when loaded), Bluetooth only on demand (`CONFIG_MUSE_BLE_ON_DEMAND`), ending a turn after 9 seconds of holding the talk key (on the 1.75C the talk key is the PWR key, and the power chip cuts power after 10 seconds of holding it) and the internal-RAM savings configuration. It applies to clean upstream and builds (flashing was not repeated with it); the runtime checks of these features come from builds of the same code on the author's device. The clock, timer and other StopWatch-only pages are not in the patch.
 
 ## Repository layout
 
@@ -280,7 +281,7 @@ See the [validation record](docs/VALIDATION.md) for measurements, the initial fa
 | `muse-cloud.example.toml` | Shared configuration template for the gateway and firmware |
 | `tools/muse-cloud.py` | Configuration checks, gateway deployment, firmware builds and flashing |
 | `worker/` | Cloudflare gateway: recognition, synthesis, bot forwarding, WireGuard enrolment, avatars and admin page |
-| `firmware/muse-cloud.patch` | Firmware patch for upstream commit `fa07304` |
+| `firmware/muse-cloud.patch` | Firmware patch for upstream commit `e6fe517` |
 | `docs/` | [Gateway guide](docs/GATEWAY.md) · [Firmware guide](docs/FIRMWARE.md) · [WireGuard server setup](docs/wireguard-server.md) · [Validation record](docs/VALIDATION.md) |
 
 The firmware and gateway share one repository so their interfaces and protocols can be maintained together. Use the pinned upstream commit, and keep the firmware patch and gateway code on the same repository version.
