@@ -14,7 +14,7 @@ This project is a modified version of the firmware of Meta's [Muse Gadgets SDK](
 - **Text from Muse on the screen.** The original firmware lets Muse send only pictures. This one also accepts text: the `display.show_text` command shows it as a scrolling teleprompter and can read it aloud, and Muse's own messages can be spoken ("All messages").
 - **WireGuard (optional).** When the network you are on cannot reach Muse directly, the device connects through a Linux server of your own. It suits the times you are away from home, where the home network's traffic splitting is not available: public Wi-Fi or a phone hotspot.
 - **A Cloudflare gateway.** One gateway that manages the recognition and synthesis above, the Grok Bot settings and WireGuard, with separate device and admin tokens. Deploying it on Cloudflare, in your own account, is recommended; the free tier is enough.
-- **Avatars and interactions.** Avatars you can change (including a picture of your own).
+- **Avatars and interactions.** Avatars you can change (including a picture of your own) and full-screen badge pictures. Upload them on the gateway's admin page, move, zoom and rotate them in a round preview first, and sync them on the device with a tap; each device has its own set.
 - **One settings file, three commands** to deploy the gateway, build the firmware and flash it. See the [firmware guide](docs/FIRMWARE.md) for every feature, including the stability fixes.
 
 ## Disclaimer
@@ -171,10 +171,21 @@ Pairing has been tested on an existing board after erasing its entire flash, not
 - **Swipe left or right** to open settings:
   - **Answers**: Muse / Grok Bot, with Muse selected by default. With Grok Bot selected, the device plays a Chinese acknowledgement before waiting for the reply. A timeout or connection failure shows an error; it does not switch to another answer source.
   - **WireGuard**: Off / Auto / Always. Off disables the tunnel; Auto starts it when Muse or the gateway cannot be reached directly; Always keeps it enabled.
-  - **Avatar**: Eyes / Pixel Muse / Picture. Create a custom picture with `tools/make-avatar-img.py`, upload it using the admin token, then tap **Get picture** in the device settings.
+  - **Avatar**: Eyes / Pixel Muse / Picture. Upload the picture on the gateway's admin page, tap **Get picture** on the device and choose **Picture**; `tools/make-avatar-img.py` also makes one.
+  - **Badge**: full-screen pictures; tap for the next one; tap **Sync with gateway**, or hold a picture for about a second and a half, to copy the pictures from the gateway. Needs a build with the badge partition.
 - Status icons and button hints are hidden by default and appear when you touch the screen.
 
 The gateway's fixed spoken prompts are currently in Chinese. The configuration template and command-line tool use English. See the [gateway guide](docs/GATEWAY.md) for changing the prompts.
+
+## Upload an avatar and badge pictures from the admin page
+
+Open the admin page (`https://<your-gateway>/admin?k=<admin token>`) and its Appearance tab:
+
+1. **Choose the device first.** Avatars and badge pictures are kept per device. A device names itself with `d=<node id>` when it asks for pictures (for example `homelink-4245c0`); the first time it asks it appears in the drop-down, named `Device` plus the last six digits, and it can be renamed or removed. A device without an id (older firmware) gets the "older single set"; pictures uploaded before this existed are there, and a button copies them to a device.
+2. **Choose pictures and edit them in the round preview.** Drag to move, use the slider or the wheel to zoom (below 1 shows more of the picture with black around it), rotate, reset, and tick "overlay the time" to see how a clock face would sit on it. The preview is what gets uploaded: the browser crops it to 233×233 (avatar) or 466×466 (badge), blacks out the corners outside the round screen, converts it to the format the device uses and uploads it; the picture does not pass through any third party.
+3. **Fetch it on the device.** Avatar: Settings > Avatar > **Get picture**, wait for Done, and choose **Picture** as the avatar (Eyes and Pixel Muse do not show a picture). Badge: Settings > Badge > **Sync with gateway**, or hold a picture for about a second and a half. A sync copies only the pictures whose version changed, and a picture deleted on the gateway disappears from the device at its next sync.
+
+The Badge page needs a build with the badge partition (`partitions_muse_badge.csv`, 4 MB, up to 9 pictures). To sync over the public address, whatever sits in front of the gateway must let `GET /badge/list` and `GET /badge/<n>` through; the admin page itself is protected by the admin token.
 
 ## Connect a custom Webhook bot
 
@@ -230,6 +241,8 @@ The figures come from a build of 2026-10-22 (after merging upstream e6fe517) and
 - **`check` says nothing is wrong, but `gateway` fails at once**: look at the error. An empty `[gateway] name` and a wrong account ID are the usual causes.
 - **Cloudflare error 9109 "Cannot use the access token from location"**: the API token has an IP address filter that does not include this machine. Add the address shown by `curl https://www.cloudflare.com/cdn-cgi/trace`, or remove the filter.
 - **The board powers off when the talk key is held for 10 seconds**: on this board the talk key is the PWR key, which is wired to the power-management chip, and the chip cuts power after a 10-second hold whatever the firmware does. Release within 10 seconds. (The firmware can end the turn by itself at 9 seconds; we did that in our own build, and the patch in this repository does not have it yet.)
+- **Uploaded in the admin page, nothing changed on the device**: check first which device is chosen at the top of the Appearance tab (not "the older single set", unless the device has older firmware without an id). For the avatar, tap **Get picture** on the device and choose **Picture**; for badge pictures tap **Sync with gateway**, they do not update by themselves.
+- **Badge sync fails when away from home**: the device uses the gateway's public address, and whatever sits in front of the gateway must let `GET /badge/list` and `GET /badge/<n>` through, otherwise they get 404.
 - **The bot never replies**: check the Webhook URL, credentials and whether the bot is allowed to reach the callback's Worker hostname.
 
 ## Costs and verification status
@@ -244,12 +257,21 @@ The following status is summarised from existing test records dated 2026-10-21:
 | Tool commands `init`, `check`, `gateway`, `status`, `firmware` | Passed, including deployment to a real free Cloudflare account; the test Worker was deleted |
 | Flash with the tool and complete a Muse voice interaction | Passed with Cloudflare Whisper recognition, Azure synthesis and WireGuard disabled |
 | Erase the same board's entire flash, then build, flash, pair and interact from scratch | Passed; not tested on a new, out-of-the-box board |
+| Upload an avatar and badge pictures from the admin page (cropped, converted and uploaded to the chosen device by the browser) | Passed: automated tests in a real browser, and a real fetch on the device |
+| A device syncing badge pictures and fetching its avatar from the gateway on the home LAN | Passed: one 434 KB picture in about 1.4 seconds on the device, no crash |
+| Syncing badge pictures over the public address while away | Not verified; the forwarder lets the GETs through, tested from the command line |
+| Editing with the mouse (dragging) in the admin page | Not verified: zoom, move and rotate were driven by script, nobody dragged by hand |
+| Several devices, each with its own avatar and pictures | Gateway side passed (38 simulated checks); two devices are registered, the other board's picture sync is not verified yet |
 | Use Grok Bot on the device after flashing with the tool | Not verified; the Worker-side bot flow has been tested |
 | Enable WireGuard and use the tool-generated key on the device | Not verified |
 | A user with no related experience follows only this guide from scratch | Not verified |
 | Other boards / native Windows | Not adapted / not verified; Windows may require WSL |
 
 See the [validation record](docs/VALIDATION.md) for measurements, the initial failure and its fix.
+
+## Where the firmware patch in this repository stands
+
+`firmware/muse-cloud.patch` is still the one for upstream `fa07304`. The author's own device now runs a newer build merged with upstream `e6fe517`, and these firmware features are not in this repository's patch yet: the Badge page and its sync from the gateway, the device id (`d=`), reloading the avatar at once after a fetch and filling the whole screen (`CONFIG_MUSE_PHOTO_FILL`), Bluetooth only on demand (`CONFIG_MUSE_BLE_ON_DEMAND`), ending a turn after 9 seconds of holding the talk key (on the 1.75C the talk key is the PWR key, and the power chip cuts power after 10 seconds of holding it), the internal-RAM savings configuration, and the clock and timer pages. The gateway side (`worker/` and the admin page) already has the calls for them, so a firmware built from this repository's patch has no Badge menu yet but nothing breaks. Folding them into the patch means regenerating the base, which is planned separately.
 
 ## Repository layout
 

@@ -248,7 +248,8 @@ async function loadVoices() {
 }
 const BADGE_MAX = 9, BADGE_SIZE = 466, AV = 233;
 let DEV = "", DEVS = [], LEGACY = {};
-try { DEV = localStorage.getItem("dev") || ""; } catch (e) {}
+let LEGACY_CHOSEN = false;   // the person picked the older single set on purpose
+try { const sv = localStorage.getItem("dev") || ""; if (sv === "legacy") LEGACY_CHOSEN = true; else DEV = sv; } catch (e) {}
 const devQ = () => (DEV ? "&d=" + encodeURIComponent(DEV) : "");
 const kq = () => "k=" + encodeURIComponent(K);
 const ago = (t) => { if (!t) return "还没来过"; const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return s < 90 ? "刚刚" : s < 5400 ? Math.round(s / 60) + " 分钟前" : s < 172800 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前"; };
@@ -260,7 +261,7 @@ async function loadDevices() {
   for (const x of DEVS) { const o = document.createElement("option"); o.value = x.d; o.textContent = x.name + " · " + ago(x.last_seen); sel.appendChild(o); }
   const o = document.createElement("option"); o.value = ""; o.textContent = "旧的单套数据（没有设备编号的旧固件用）"; sel.appendChild(o);
   if (DEV && !DEVS.find((x) => x.d === DEV)) DEV = "";
-  if (!DEV && !(LEGACY.badges || LEGACY.avatar) && DEVS.length) DEV = DEVS[0].d;   // nothing in the older set: start on a real device
+  if (!DEV && !LEGACY_CHOSEN && DEVS.length) DEV = DEVS[0].d;   // start on a real device, never on the older set unless it was chosen
   sel.value = DEV; devInfo();
 }
 function devInfo() {
@@ -269,7 +270,7 @@ function devInfo() {
   const showMig = !!DEV && (LEGACY.badges || LEGACY.avatar) && x && !x.badges && !x.avatar;
   $("dev_migrate").style.display = showMig ? "block" : "none";
 }
-function devChange() { DEV = $("dev_sel").value; try { localStorage.setItem("dev", DEV); } catch (e) {} devInfo(); loadBadges(); avatarShow(); }
+function devChange() { DEV = $("dev_sel").value; LEGACY_CHOSEN = !DEV; try { localStorage.setItem("dev", DEV || "legacy"); } catch (e) {} devInfo(); loadBadges(); avatarShow(); }
 async function devRename() {
   if (!DEV) { $("dev_msg").textContent = "旧的单套数据没有名字。"; return; }
   const x = DEVS.find((y) => y.d === DEV); const name = prompt("设备名字", x ? x.name : ""); if (!name) return;
