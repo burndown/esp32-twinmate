@@ -40,7 +40,7 @@ sequenceDiagram
   W->>W: id = 16 位随机十六进制 + 16 位 HMAC，tok = 16 位随机十六进制
   W->>O: /init {tok}：存入 {tok, text: null}，10 分钟后闹钟
   W->>B: POST Webhook：问题和回调地址 /bot-reply/{id}/{tok}
-  loop 最长 270 秒，每次最多等 30 秒
+  loop 最长 90 秒，每次最多等 30 秒
     W->>O: /wait：睡到有答案或这一段结束
   end
   B->>C: POST /bot-reply/{id}/{tok} {reply}
@@ -57,9 +57,9 @@ sequenceDiagram
 2. 它生成这次提问的 **id**（16 位随机十六进制，后面接上用设备令牌做密钥对它计算的 16 位 HMAC）和一个一次性**令牌**（16 位随机十六进制）。
 3. 它用 `/init` 调用以 id 命名的 Durable Object，对象存入 `{ tok, text: null }`，并设一个 10 分钟的闹钟。
 4. 它用 `Authorization: Bearer <凭据>` 向 Webhook 发 POST。消息里有问题和回调地址 `<回调主机>/bot-reply/<id>/<tok>`，只用一次。如果机器人返回非 2xx 或网络出错，这次提问以 `bot_unreachable` 结束。
-5. 它开始等：每次向 Durable Object 发 `/wait`，最多等 30 秒，总共最长 270 秒（`BOT_WAIT_MS`）。答案一存进去，这一段就立刻返回。
+5. 它开始等：每次向 Durable Object 发 `/wait`，最多等 30 秒，总共最长 90 秒（`BOT_WAIT_MS`）。答案一存进去，这一段就立刻返回。
 6. 机器人把答案 POST 到回调地址。`botReply` 先验证 id 里的 HMAC，不是 Worker 生成的 id 会在碰任何存储之前被拒绝。然后 Durable Object 的 `/reply` 只在令牌对得上、并且还没有文字时才写入，并唤醒等待中的那一段。
-7. Worker 读到文字后调用 `/done`（对象删除全部内容），去掉 Markdown 符号（星号、井号和反引号），把答案流式送给设备。如果 270 秒内没有答案，回复以 `bot_timeout` 结束。
+7. Worker 读到文字后调用 `/done`（对象删除全部内容），去掉 Markdown 符号（星号、井号和反引号），把答案流式送给设备。如果 90 秒内没有答案，回复以 `bot_timeout` 结束。
 
 提问失败时，回复的剩余部分不是答案：它以控制字符 `\u0001` 加一个短代码（`bot_timeout`、`bot_unreachable`）开头，固件会显示错误，而不是把它念出来。
 
@@ -83,7 +83,7 @@ sequenceDiagram
 - **一个提问只收一个答案。** `/reply` 需要匹配的令牌和空的 `text`；第二次 POST 会得到 403。
 - **令牌放在路径里**，不放在查询参数里，因为有的机器人会把 `&` 做 HTML 转义，破坏查询字符串。旧的 `?id=&t=` 形式仍然可用。
 - **Webhook 和回调地址必须是公网域名上的 `https`**（`checkHttpsUrl`），这样机器人的凭据不会被发到内网地址。
-- **限制：** 提问最多 1000 字，答案最多 4000 字，整个等待最长 270 秒。
+- **限制：** 提问最多 1000 字，答案最多 4000 字，整个等待最长 90 秒。
 
 ## 看日志
 

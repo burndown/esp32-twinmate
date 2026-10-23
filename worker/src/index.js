@@ -229,7 +229,7 @@ async function tts(req, env, all) {
 // ---- Grok Bot (a Webhook bot) ----------------------------------------------------------------------------
 // A cloud agent that takes a webhook and answers later (30 s to a few minutes). The device speaks an acknowledgement at once,
 // the gateway keeps the response open, the bot POSTs its answer to /bot-reply with a one-time token, and the answer is streamed on.
-const BOT_WAIT_MS = 270000;
+const BOT_WAIT_MS = 90000;
 function hex(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
 
 // The callback host's real address from a public resolver: some bots sit behind a DNS that answers with a fake 198.18.x.x.
