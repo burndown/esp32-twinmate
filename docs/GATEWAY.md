@@ -27,7 +27,7 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 
 ## The settings page
 
-`https://<your-worker>.workers.dev/admin?k=<admin token>`. Everything is set on one page, and every setting has a **Test** button:
+`https://<your-worker>.workers.dev/admin?k=<admin token>`. The page has tabs (Overview, Voice, Bot, Network, Appearance); the Save bar is shown on the tabs that have settings to save, and every setting has a **Test** button:
 
 - **This gateway**: the three addresses to put in the firmware, and the state of the Workers AI binding, the Durable Object binding and the admin token.
 - **Speech recognition**: Cloudflare Workers AI (Whisper large-v3-turbo, free, no key) or Azure Speech, and the language.

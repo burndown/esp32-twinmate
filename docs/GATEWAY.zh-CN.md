@@ -27,7 +27,7 @@
 
 ## 设置页
 
-`https://<你的worker>.workers.dev/admin?k=<管理令牌>`，一个页面里设置全部，每一项都有"测试"按钮：
+`https://<你的worker>.workers.dev/admin?k=<管理令牌>`，页面上方有导航（概览、语音、机器人、网络、外观），有设置要保存的页签底部会出现保存栏，每一项都有"测试"按钮：
 
 - **这个网关**：固件里要填的三个地址，Workers AI、Durable Object、管理令牌三个状态。
 - **语音识别**：Cloudflare Workers AI（Whisper large-v3-turbo，免费、不要密钥）或 Azure Speech，和语言。
