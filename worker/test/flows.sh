@@ -8,17 +8,17 @@ set -u
 . "$(dirname "$0")/lib.sh"
 gw_start
 chat() { curl -s -m 30 -X POST "$B/chat?k=devtok" -H "X-Device: ${DEV:-homelink-aaaaaa}" -d "$1"; }
-admin() { curl -s -X POST "$B/admin/api?k=admtok${2:-}" -d "$1"; }
+admin() { for i in 1 2 3 4 5; do r=$(curl -s -X POST "$B/admin/api?k=admtok${2:-}" -d "$1"); case "$r" in *'"ok":true'*) echo "$r"; return 0 ;; esac; sleep 1; done; echo "FAIL  admin save: $r"; fail=1; }
 
 check    "a turn with no flag is for Muse (503)"       503 "$(code -X POST "$B/chat?k=devtok" -d '{"text":"hi"}')"
 check    "a turn with no text is refused (400)"        400 "$(code -X POST "$B/chat?k=devtok" -d '{"away":true}')"
 r=$(chat '{"text":"hello","away":true}')
 contains "away: the acknowledgement comes first"       "收到" "$r"
 contains "away without a bot set up: told it failed"   "bot_unreachable" "$r"
-chat '{"text":"x"}' >/dev/null
+chat '{"text":"x"}' >/dev/null; wait_device homelink-aaaaaa
 admin '{"config":{"bot":{"mode":"off"}},"over":["bot"]}' "&d=homelink-aaaaaa" >/dev/null
 check    "bot mode off: away goes to Muse (503)"       503 "$(code -X POST "$B/chat?k=devtok" -H "X-Device: homelink-aaaaaa" -d '{"text":"hi","away":true}')"
-DEV=homelink-bbbbbb chat '{"text":"x"}' >/dev/null
+DEV=homelink-bbbbbb chat '{"text":"x"}' >/dev/null; wait_device homelink-aaaaaa
 admin '{"config":{"bot":{"mode":"always"}},"over":["bot"]}' "&d=homelink-bbbbbb" >/dev/null
 r=$(DEV=homelink-bbbbbb chat '{"text":"hi"}')
 contains "bot mode always: even a home turn goes to the bot" "收到" "$r"

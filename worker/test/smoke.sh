@@ -11,7 +11,7 @@ check "health with admin token"            200 "$(code "$B/health?k=admtok")"
 check "admin page without a token"         403 "$(code "$B/admin")"
 check "admin page with the device token"   403 "$(code "$B/admin?k=devtok")"
 check "admin page with the admin token"    200 "$(code "$B/admin?k=admtok")"
-code -X POST "$B/chat?k=devtok" -H "X-Device: $D" -d '{"text":"hi"}' >/dev/null; sleep 1
+code -X POST "$B/chat?k=devtok" -H "X-Device: $D" -d '{"text":"hi"}' >/dev/null; wait_device $D
 check "device registered after a chat"     1 "$(curl -s "$B/admin/devices?k=admtok" | grep -c "\"d\":\"$D\"")"
 check "per-device settings saved"          '{"ok":true}' "$(curl -s -X POST "$B/admin/api?k=admtok&d=$D" -d '{"over":["tts"],"config":{"tts":{"voice":"zh-CN-YunxiNeural"}}}')"
 check "the override is listed for it"      1 "$(curl -s "$B/admin/devices?k=admtok" | grep -c '"over":\["tts"\]')"

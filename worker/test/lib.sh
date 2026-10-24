@@ -22,3 +22,5 @@ check() { # name expected actual
 contains() { case "$3" in *"$2"*) echo "ok    $1" ;; *) echo "FAIL  $1: expected to contain '$2', got '${3:0:120}'"; fail=1 ;; esac; }
 lacks() { case "$3" in *"$2"*) echo "FAIL  $1: must not contain '$2', got '${3:0:120}'"; fail=1 ;; *) echo "ok    $1" ;; esac; }
 finish() { [ $fail = 0 ] || { echo "--- gateway log (tail)"; tail -20 "$LOG"; }; exit $fail; }
+# A gadget is listed only after the gateway wrote it (it does that after answering): wait until it shows, before changing its settings.
+wait_device() { for i in $(seq 1 30); do curl -s "$B/admin/devices?k=admtok" | grep -q "\"d\":\"$1\"" && return 0; sleep 0.5; done; echo "FAIL  device $1 never appeared"; fail=1; }
