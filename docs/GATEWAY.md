@@ -50,6 +50,8 @@ A gadget is recognised on `/stt`, `/chat` and `/tts` by `d=<node id>` or an `X-D
 
 The WireGuard tab lists the keys that asked for a tunnel. Each can be labelled, assigned to a gadget, approved (a mark in the registry only) or revoked, and the page shows the `wg set` line, the `[Peer]` block to append to `wg0.conf`, and a client config template (a key the device made itself has its private key only on the device). "New key" makes an X25519 key pair in the browser, registers and approves the public key, and shows the full client config once; the private key is never sent to the gateway. The page works over plain http, so the key generator is plain JavaScript (BigInt) instead of WebCrypto. Putting the peer on the WireGuard server stays a manual step. Calls: `GET /admin/api?d=<id>`, `POST /admin/api?d=<id>` (body `{config, over: ["asr","tts","bot"]}`), `GET /admin/wg`, `POST /admin/wg` (`approve`, `revoke`, `label`, `assign`, `add`), `GET /admin/wg/conf?pub=…&type=server|client`.
 
+A lost gadget can be blocked on the Devices tab ("Block", with a confirmation; "Unblock" undoes it). Once blocked, every gadget call that carries its id (`/stt`, `/chat`, `/tts`, `/wg/enroll`, the badge and avatar downloads) gets `403 blocked`, and its tunnel key is revoked in the registry (unblocking does not approve the key again; do that on the WireGuard tab). The settings page itself is not affected. **Limit:** the gadget token is shared by all gadgets, so a request without an id, an old firmware, or someone who strips the id is not stopped by this. For a gadget that is really gone, also remove its peer on the WireGuard server and, if needed, replace the gadget token.
+
 ## Protections
 
 - Requests have size limits: `/stt` 2 MB, `/tts` 600 characters, `/chat` 1000 characters, the picture 120 KB. Anything larger gets `413`.
@@ -80,6 +82,7 @@ The gateway **first** makes the device say the acknowledgement, then sends the W
 | What | Status |
 |---|---|
 | Deployed to a free Cloudflare account; recognition (Whisper and Azure), synthesis, the settings page and its calls, a real bot, WireGuard enrolment | Passed |
+| Blocking a lost gadget (2026-10-24): the Worker run locally with workerd; a gadget with an id is refused on `/chat` (header), `/tts` (`d=`) and `/wg/enroll` once blocked, another gadget and the settings page are not affected, its tunnel key is revoked, unblocking restores it | Passed locally; not deployed to a real Worker, not tried on a real device |
 | Settings per device and the WireGuard tab (2026-10-24): the Worker run locally with workerd and its calls tested, the page clicked through in a browser (device switch, lock and unlock, save, new key) | Passed locally; not yet deployed to a Cloudflare Worker, not tested with a device that sends its id |
 | The settings page clicked through item by item in a browser (desktop and phone width) | Passed (the clipboard content of the copy button could not be confirmed; if copying fails it selects the text and tells you) |
 | A real bot through a free Cloudflare account: the acknowledgement comes at once, the answer in about 11 to 22 seconds, and the Worker's CPU time for that part is only 1 to 4 ms | Passed (requested directly from the Worker, and once as a full Muse turn on the device) |

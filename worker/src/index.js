@@ -589,7 +589,7 @@ async function adminDevices(env) {
   const devs = await devicesGet(env);
   const out = [];
   for (const [d, e] of Object.entries(devs)) {
-    out.push({ d, name: e.name || d, first_seen: e.first_seen || 0, last_seen: e.last_seen || 0, wg: e.wg_pub || "",
+    out.push({ d, name: e.name || d, first_seen: e.first_seen || 0, last_seen: e.last_seen || 0, wg: e.wg_pub || "", blocked: !!e.blocked,
       over: Object.keys(await devCfgGet(env, d)),
       badges: (await badgeIndex(env, d)).length, avatar: !!(await env.CFG.get(kAvatar(d), "arrayBuffer")) });
   }
@@ -597,7 +597,7 @@ async function adminDevices(env) {
   return json({ devices: out, legacy: { badges: (await badgeIndex(env, "")).length, avatar: !!(await env.CFG.get("avatar", "arrayBuffer")) }, max: MAX_DEVICES });
 }
 async function adminDevice(req, env) {
-  const { d, name, remove } = await req.json().catch(() => ({}));
+  const { d, name, remove, block } = await req.json().catch(() => ({}));
   if (typeof d !== "string" || !DEVICE_RE.test(d)) return json({ error: "bad device id" }, 400);
   const devs = await devicesGet(env);
   if (!devs[d]) return json({ error: "unknown device" }, 404);
@@ -607,6 +607,11 @@ async function adminDevice(req, env) {
     await env.CFG.delete(kAvatar(d));
     await env.CFG.delete("devcfg:" + d);
     delete devs[d];
+  } else if (typeof block === "boolean") {
+    // A lost gadget: blocked, every call it makes with its id is refused (see fetch). Its tunnel key is revoked too, so it stops
+    // being an approved peer; unblocking does not approve the key again.
+    if (block) devs[d].blocked = true; else delete devs[d].blocked;
+    if (block && devs[d].wg_pub && env.WG) await reg(env, "revoke", { pub: devs[d].wg_pub }).catch(() => {});
   } else if (typeof name === "string" && name.trim()) {
     devs[d].name = name.trim().slice(0, 40);
   } else {
@@ -792,6 +797,7 @@ export default {
     if (!allowed) return text("forbidden", 403);
     // A gadget names itself with d=<id> or the X-Device header; its own settings (recognition, voice, bot mode) then apply to /stt /chat /tts.
     const dev = asDevice ? devParam(url) || (DEVICE_RE.test(req.headers.get("x-device") || "") ? req.headers.get("x-device") : "") : "";
+    if (dev && (await devicesGet(env))[dev]?.blocked) return text("blocked", 403);   // a lost gadget (settings page: Devices → Block)
     const all = await loadAll(env, dev);
     if (dev && ["/stt", "/chat", "/tts"].includes(url.pathname)) ctx.waitUntil(deviceSeen(env, dev).catch(() => {}));
     try {

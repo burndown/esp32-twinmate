@@ -359,11 +359,13 @@ function renderDevices() {
   for (const x of DEVS) {
     const chips = [];
     if (x.over.length) for (const s of x.over) chips.push(el("span", { class: "chip warn", text: "单独：" + (SEC_NAME[s] || s) })); else chips.push(el("span", { class: "chip", text: "全部跟随全局" }));
+    if (x.blocked) chips.push(el("span", { class: "chip warn", text: "已拉黑：拒绝连接" }));
     if (x.wg) chips.push(el("span", { class: "chip ok", text: "隧道 " + (ipOf(x.wg) || "已分配") }));
     chips.push(el("span", { class: "chip", text: x.badges + " 张 Badge" + (x.avatar ? "，有头像" : "") }));
     const btns = el("div", { class: "btns" }, [
       el("button", { text: "设置这台设备", onclick: () => { setScope(x.d); location.hash = "#answer"; } }),
       el("button", { text: "改名", onclick: () => devRename(x.d) }),
+      el("button", { text: x.blocked ? "解除拉黑" : "拉黑", onclick: () => devBlock(x.d, !x.blocked) }),
       el("button", { text: "删除", onclick: () => devRemove(x.d) })
     ]);
     if ((LEGACY.badges || LEGACY.avatar) && !x.badges && !x.avatar) btns.appendChild(el("button", { text: "把旧的头像和图片分给它", onclick: () => devMigrate(x.d) }));
@@ -374,6 +376,13 @@ async function devRename(d) {
   const x = DEVS.find((y) => y.d === d); const name = prompt("设备名字", x ? x.name : ""); if (!name) return;
   const r = await api("/admin/device", { method: "POST", body: JSON.stringify({ d, name }) });
   $("dev_msg").textContent = r.ok ? "已改名。" : (r.error || "失败"); await loadDevices();
+}
+async function devBlock(d, block) {
+  const x = DEVS.find((y) => y.d === d);
+  if (block && !confirm("拉黑「" + (x ? x.name : d) + "」？它带着这个设备编号的请求（说话、聊天、取图、登记隧道）都会被拒绝，隧道密钥也会被撤销。设备丢了才这么做。")) return;
+  const r = await api("/admin/device", { method: "POST", body: JSON.stringify({ d, block }) });
+  $("dev_msg").textContent = r.ok ? (block ? "已拉黑，并撤销了它的隧道密钥。" : "已解除拉黑。它的隧道密钥要在 WireGuard 页签里重新批准。") : (r.error || "失败");
+  await loadDevices();
 }
 async function devRemove(d) {
   if (!confirm("删除这台设备，以及它的头像、Badge 图片和单独设置？它下次来的时候会重新出现，但这些没了。")) return;
