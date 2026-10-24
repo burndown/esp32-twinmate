@@ -5,6 +5,7 @@
 # localhost is refused on purpose); that path was verified against a real bot, see docs/GATEWAY.md.
 # Usage: worker/test/flows.sh   (needs node)
 set -u
+PORT=${PORT:-8795}   # not the smoke test's port, so a slow shutdown of the one cannot disturb the other
 . "$(dirname "$0")/lib.sh"
 gw_start
 chat() { curl -s -m 30 -X POST "$B/chat?k=devtok" -H "X-Device: ${DEV:-homelink-aaaaaa}" -d "$1"; }
