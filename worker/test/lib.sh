@@ -2,6 +2,8 @@
 # `check`, `code` and the base URL $B. Source it, then call `gw_start --var NAME:VALUE ...`.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PORT=${PORT:-8797}; B=http://127.0.0.1:$PORT; fail=0; PID=""; MPID=""
+curl() { command curl -m 25 "$@"; }   # no call may hang the test (a stuck request would stall CI for an hour)
+[ -n "${TEST_TRACE:-}" ] && set -x
 gw_start() {
   TMP=$(mktemp -d); LOG=$TMP/wrangler.log
   mkdir -p "$TMP/w"; cp -r "$ROOT/src" "$TMP/w/src"
@@ -14,7 +16,7 @@ gw_start() {
   echo "gateway did not start"; tail -20 "$LOG"; exit 1
 }
 mock_start() { node "$ROOT/test/mock.mjs" "$MOCK_PORT" & MPID=$!; sleep 1; }
-gw_stop() { [ -n "$PID" ] && { kill "$PID" 2>/dev/null; pkill -P "$PID" 2>/dev/null; }; [ -n "$MPID" ] && kill "$MPID" 2>/dev/null; rm -rf "$TMP"; }
+gw_stop() { [ "$fail" != 0 ] && [ -n "${TEST_TRACE:-}" ] && { echo "--- gateway log"; tail -40 "$LOG"; }; [ -n "$PID" ] && { kill "$PID" 2>/dev/null; pkill -P "$PID" 2>/dev/null; }; [ -n "$MPID" ] && kill "$MPID" 2>/dev/null; rm -rf "$TMP"; }
 code() { curl -s -o /dev/null -w "%{http_code}" "$@"; }
 check() { # name expected actual
   if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: expected $2, got $3"; fail=1; fi
