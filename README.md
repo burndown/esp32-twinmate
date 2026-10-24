@@ -281,6 +281,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 | 场景 | 状态 |
 |---|---|
 | 在干净的上游 `e6fe517` 上应用补丁并用脚本编译（含 Badge、设备编号、蓝牙按需等） | 已通过（只编译，没有刷机） |
+| 同一补丁（含时钟、计时器、秒表页面和 1 秒按键下限）：在干净的 `e6fe517` 上应用，分别为 Waveshare 1.75C 和 M5Stack StopWatch 编译 | 已通过；同一份代码在作者的 StopWatch 和圆圆上刷机运行，短按和正常说话都试过 |
 | 在干净的上游 `fa07304` 上应用补丁，从配置生成设置并编译 | 已通过，包含启用 WireGuard 的编译组合 |
 | 脚本 `init`、`check`、`gateway`、`status`、`firmware` | 已通过，包含真实 Cloudflare 免费账号部署；测试 Worker 已删除 |
 | 使用脚本刷写后，完成 Muse 语音交互 | 已通过，识别使用 Cloudflare Whisper，合成使用 Azure，WireGuard 关闭 |
@@ -299,7 +300,7 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 
 ## 这个仓库里的固件补丁停在哪里
 
-`firmware/muse-cloud.patch` 现在针对上游 `e6fe517`，包含：Badge 页和从网关同步图片、设备编号（`d=`）、头像取回后立即刷新和铺满整屏（`CONFIG_MUSE_PHOTO_FILL`，载入时放大一次）、蓝牙按需启动（`CONFIG_MUSE_BLE_ON_DEMAND`）、说话键按住 9 秒自动结束（1.75C 的说话键是 PWR 键，电源芯片按住 10 秒会硬件断电）和省内部 RAM 的配置。它在干净的上游上应用并编译通过（不含刷机验证）；这些功能的运行验证来自作者设备上同一份代码的构建。时钟、计时器等 StopWatch 专用页面不在补丁里。
+`firmware/muse-cloud.patch` 现在针对上游 `e6fe517`，包含：Badge 页和从网关同步图片、设备编号（`d=`）、头像取回后立即刷新和铺满整屏（`CONFIG_MUSE_PHOTO_FILL`，载入时放大一次）、蓝牙按需启动（`CONFIG_MUSE_BLE_ON_DEMAND`）、说话键按住 9 秒自动结束（1.75C 的说话键是 PWR 键，电源芯片按住 10 秒会硬件断电）和省内部 RAM 的配置。它在干净的上游上应用并编译通过（不含刷机验证）；这些功能的运行验证来自作者设备上同一份代码的构建。另外补丁带有 M5Stack StopWatch 用的时钟（含天气）、计时器和秒表页面，以及设备编号 `X-Device` 请求头（聊天、识别、合成和 WireGuard 登记都带上，网关据此按设备应用设置，也能拉黑丢失的设备）、短于 1 秒的按键不发送（多半是误触）。秒表页面的界面和逻辑来自 [VolosR/M5Stopwatch](https://github.com/VolosR/M5Stopwatch)，已征得原作者同意，详见 `esp32/components/muse/volos/NOTICE.md`。
 
 ## 仓库结构
 
@@ -319,4 +320,5 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 - 设备令牌写入固件，用于识别、合成、对话、WireGuard 登记和头像下载。网关管理使用独立的管理令牌。访问管理页面时，也应保护包含令牌的完整网址。
 - 网关和工具代码采用 MIT 许可，见 [LICENSE](LICENSE)。
 - `firmware/muse-cloud.patch` 是对上游 Muse Gadgets SDK 的修改，遵循上游 [Apache-2.0](https://github.com/facebookincubator/muse-gadget-sdk/blob/main/LICENSE)。16×16 中文字库数据来自 [GNU Unifont](https://unifoundry.com/unifont/) 16.0.04（GPLv2+ 带字体嵌入例外，另有 OFL-1.1 双许可）；眼睛的形状和手势改编自 [zongzhu-bot](https://github.com/Liu-zhongxian/zongzhu-bot)（MIT）；WireGuard 使用 [esphome/wireguard](https://components.espressif.com/components/esphome/wireguard)（BSD-3）；“所有消息”功能改编自 [wupsbr/waveshare-muse-gadget-sdk](https://github.com/wupsbr/waveshare-muse-gadget-sdk) 的两个提交。
+- 秒表页面的界面和逻辑基于 [VolosR/M5Stopwatch](https://github.com/VolosR/M5Stopwatch)（该仓库没有许可文件，已征得原作者同意使用），其中字体为从该项目的 G7 Segment 和 Modum 字体重新生成。
 - “Muse”“WireGuard”等商标归各自所有者。服务商 API 的接入方式参考了 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)（MIT）。
