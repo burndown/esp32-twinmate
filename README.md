@@ -309,7 +309,10 @@ ESP32-S3 有三种存储：外挂的 **Flash**（断电保留，最慢）、芯�
 | `muse-cloud.example.toml` | 网关和固件的统一配置模板 |
 | `tools/muse-cloud.py` | 配置检查、网关部署、固件编译与刷写工具 |
 | `worker/` | Cloudflare 网关：语音识别、合成、机器人转发、WireGuard 登记、头像和管理页面 |
-| `firmware/muse-cloud.patch` | 针对上游提交 `e6fe517` 的固件补丁 |
+| `firmware/muse-cloud.patch` | 针对上游提交 `e6fe517` 的固件补丁；上游提交的完整编号在 `firmware/UPSTREAM_BASE` |
+| `tools/scan-private.sh` | 推送前扫描局域网地址、本机路径、用户名、令牌、私钥和 MAC |
+| `worker/test/smoke.sh` | 在本机用 workerd 跑网关的冒烟测试（令牌、设备登记、拉黑与解除、隧道密钥） |
+| `.github/workflows/ci.yml` | 每次推送自动跑：隐私扫描、网关冒烟测试、补丁能否应用到上游 |
 | `docs/` | [网关说明](docs/GATEWAY.zh-CN.md) · [固件说明](docs/FIRMWARE.zh-CN.md) · [WireGuard 服务器配置](docs/wireguard-server.zh-CN.md) · [验证记录](docs/VALIDATION.zh-CN.md) |
 
 固件和网关放在同一仓库中，便于同步维护接口和协议。编译时请使用仓库指定的上游提交，并配套使用同一版本的固件补丁和网关代码。

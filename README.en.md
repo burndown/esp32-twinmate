@@ -282,7 +282,10 @@ See the [validation record](docs/VALIDATION.md) for measurements, the initial fa
 | `muse-cloud.example.toml` | Shared configuration template for the gateway and firmware |
 | `tools/muse-cloud.py` | Configuration checks, gateway deployment, firmware builds and flashing |
 | `worker/` | Cloudflare gateway: recognition, synthesis, bot forwarding, WireGuard enrolment, avatars and admin page |
-| `firmware/muse-cloud.patch` | Firmware patch for upstream commit `e6fe517` |
+| `firmware/muse-cloud.patch` | Firmware patch for upstream commit `e6fe517` (the full commit id is in `firmware/UPSTREAM_BASE`) |
+| `tools/scan-private.sh` | Scans for LAN addresses, local paths, user names, tokens, private keys and MACs before a push |
+| `worker/test/smoke.sh` | Runs the gateway's smoke test locally with workerd (tokens, device registration, block and unblock, tunnel key) |
+| `.github/workflows/ci.yml` | Runs on every push: the privacy scan, the gateway smoke test, and whether the patch applies to upstream |
 | `docs/` | [Gateway guide](docs/GATEWAY.md) · [Firmware guide](docs/FIRMWARE.md) · [WireGuard server setup](docs/wireguard-server.md) · [Validation record](docs/VALIDATION.md) |
 
 The firmware and gateway share one repository so their interfaces and protocols can be maintained together. Use the pinned upstream commit, and keep the firmware patch and gateway code on the same repository version.

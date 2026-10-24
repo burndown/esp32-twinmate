@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scan:
+    name: No private data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/scan-private.sh
+
+  worker:
+    name: Worker smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --check worker/src/index.js
+      - run: python3 -m py_compile tools/muse-cloud.py tools/make-wg-config.py tools/make-avatar-img.py
+      - run: worker/test/smoke.sh
+
+  patch:
+    name: Firmware patch applies to upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Clone upstream at the commit the patch is for
+        run: |
+          BASE=$(cat firmware/UPSTREAM_BASE)
+          echo "base: $BASE"
+          git clone --quiet https://github.com/facebookincubator/muse-gadget-sdk.git upstream
+          git -C upstream checkout --quiet "$BASE"
+      - run: git -C upstream apply --check "$GITHUB_WORKSPACE/firmware/muse-cloud.patch"
