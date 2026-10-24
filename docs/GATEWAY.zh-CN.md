@@ -40,6 +40,16 @@
 
 保存是按段合并的，只改你改的那一段。**保存后最多约一分钟生效**：Cloudflare KV 的读取有缓存。页面保存的密钥放在你自己 Cloudflare 账号的 KV 里（明文），页面只显示末四位；更严格的做法是用 `wrangler secret put AZURE_SPEECH_KEY`、`GROKBOT_URL`、`GROKBOT_AUTH`（WireGuard 的服务器信息也可以用 `WG_SERVER_PUB`、`WG_ENDPOINT`、`WG_PORT`、`WG_SUBNET`）。
 
+## 分设备设置与 WireGuard 管理
+
+页面顶部有“设置对象”栏：选“全局默认”或某台设备。一台设备可以单独设置三块：识别（`asr`：服务商、语言）、合成（`tts`：区域、音色）和机器人模式（`bot.mode`：`auto`、`always`、`off`）。没有单独设置的部分跟随全局，完全没有覆盖的设备和以前一样。覆盖存在 KV 的 `devcfg:<编号>` 里。Webhook 地址和授权、回调域名、Azure 密钥、WireGuard 服务器信息仍是全局的，选了设备之后页面会把它们锁住。
+
+机器人模式：`auto` 是原来的规则（设备说自己不在家时才问机器人，其余交给 Muse）；`always` 把到达 `/chat` 的每个问题都交给机器人；`off` 一律不问机器人（由 Muse 回答）。
+
+设备在 `/stt`、`/chat`、`/tts` 上靠 `d=<节点编号>` 或 `X-Device: homelink-xxxxxx` 请求头被认出来（令牌校验之后）。**这两样都没带的固件（比如现有的补丁）认不出来，用的是全局设置**，所以分设备的设置要等固件把节点编号放进这些请求才会生效（头像和 Badge 图片已经在用 `d=`）。
+
+WireGuard 页签列出申请过隧道的密钥：可以改名、分配给设备、批准（只是在注册表里做标记）或撤销，页面会给出 `wg set` 命令、要追加到 `wg0.conf` 的 `[Peer]` 段和客户端配置模板（设备自己生成的密钥，私钥只在设备上）。“新建密钥”在浏览器里生成 X25519 密钥对，登记并批准公钥，完整的客户端配置只显示一次，私钥不会发给网关。页面在纯 http 下也能用，所以密钥生成是纯 JavaScript（BigInt），不依赖 WebCrypto。把 peer 加到 WireGuard 服务器上仍然是手动一步。接口：`GET /admin/api?d=<编号>`、`POST /admin/api?d=<编号>`（body `{config, over: ["asr","tts","bot"]}`）、`GET /admin/wg`、`POST /admin/wg`（`approve`、`revoke`、`label`、`assign`、`add`）、`GET /admin/wg/conf?pub=…&type=server|client`。
+
 ## 防护
 
 - 请求大小有上限：`/stt` 2 MB、`/tts` 600 字、`/chat` 1000 字、头像 120 KB，超过返回 413。
@@ -66,6 +76,7 @@
 | 项 | 状态 |
 |---|---|
 | 部署到 Cloudflare 免费账号；识别（Whisper、Azure）、合成、设置页和设置接口、真机器人、WireGuard 申请 | 通过 |
+| 分设备设置和 WireGuard 页签（2026-10-24）：用 workerd 在本地跑起来测了接口，并在浏览器里点了一遍（切换设备、锁定与解锁、保存、新建密钥） | 本地通过；还没部署到 Cloudflare Worker，也没有用会报自己编号的设备测过 |
 | 设置页在浏览器里逐项点过（桌面和手机宽度） | 通过（复制按钮的剪贴板内容没能确认，复制失败时会改为选中文字并提示） |
 | 真机器人经 Cloudflare 免费账号：确认话立即出，约 11 到 22 秒拿到答案，Worker 这一段 CPU 时间只有 1 到 4 毫秒 | 通过（直接请求 Worker 测过，也在圆圆上测过一次完整的 Muse 一轮） |
 | 圆圆上 Muse 的完整一轮（纯云端构建，所有请求只指向 Worker）：1469 字的回答分 11 次取语音，念了 94 秒，整轮 112 秒，没有超出 CPU 限制 | 通过 |

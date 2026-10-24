@@ -36,13 +36,29 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 .nav a.on{color:var(--fg);background:var(--card);border-color:var(--line);font-weight:600}
 .tab{display:none}.tab.on{display:block}
 .intro{color:var(--mute);margin:16px 0 0;font-size:.9rem}
+.scope{position:sticky;top:0;z-index:6;background:var(--bg);margin:0 -16px;padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.scope select{width:auto;min-width:200px;flex:1;max-width:340px}
+.scope .hint{margin:0}
+.nav{top:55px}
+.own{float:right;font-size:.8rem;color:var(--mute);display:none;align-items:center;gap:6px;margin:0}
+.dev .own{display:flex}
+.own input{margin:0}
+.dis{opacity:.55}
+.devrow,.peer{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:10px 0;background:var(--bg)}
+.devrow b,.peer b{font-weight:600}
+.chip{display:inline-block;font-size:.72rem;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mute);margin-right:4px}
+.chip.ok{color:var(--ok);border-color:var(--ok)}.chip.warn{color:var(--acc);border-color:var(--acc)}
+.mono{font:12px/1.4 ui-monospace,Menlo,monospace;word-break:break-all;color:var(--mute)}
+pre.cfg{background:var(--bg);border:1px dashed var(--line);border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-all;margin:8px 0}
+.btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.btns button{padding:4px 10px;font-size:.85rem}
 </style>
 </head>
 <body>
 <div class="w">
 <h1>Muse 网关设置</h1>
-<p class="sub">固件把识别、合成和 Grok Bot 的请求都发到这里。改完点“保存”，下一句话就生效，不用重刷固件。</p>
-<nav class="nav" id="nav"><a href="#overview" data-tab="overview">概览</a><a href="#voice" data-tab="voice">语音</a><a href="#bot" data-tab="bot">机器人</a><a href="#network" data-tab="network">网络</a><a href="#look" data-tab="look">外观</a></nav>
+<p class="sub">固件把识别、合成和 Grok Bot 的请求都发到这里。改完点“保存”，下一句话就生效，不用重刷固件。在上面选一台设备，可以给它单独设置识别、语音和机器人模式；没有单独设置的部分跟随全局。</p>
+<div class="scope" id="scope_bar"><span class="hint">设置对象</span><select id="scope_sel" onchange="scopeChange()"></select><span class="hint" id="scope_info"></span></div>
+<nav class="nav" id="nav"><a href="#overview" data-tab="overview">概览</a><a href="#voice" data-tab="voice">语音</a><a href="#bot" data-tab="bot">机器人</a><a href="#network" data-tab="network">网络</a><a href="#devices" data-tab="devices">设备</a><a href="#look" data-tab="look">外观</a></nav>
 
 <section class="tab" id="tab-overview">
 <p class="intro">固件里要填的地址，以及这个网关的绑定状态。</p>
@@ -61,11 +77,14 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 
 <div class="card">
 <h2>语音识别</h2>
+<label class="own"><input type="checkbox" data-own="asr"> 这台设备单独设置</label>
+<div data-sec="asr">
 <div class="row">
  <div><label>服务商</label><select id="asr_provider">
   <option value="cloudflare">Cloudflare Workers AI（Whisper，免费）</option>
   <option value="azure">微软 Azure Speech</option></select></div>
  <div><label>语言</label><input type="text" id="asr_language" placeholder="zh-CN"></div>
+</div>
 </div>
 <p class="hint">Cloudflare：免费每天约 200 分钟，不需要密钥，要在 <code>wrangler.toml</code> 里有 <code>[ai]</code> 绑定。Azure：免费档每月 5 小时，与语音合成同一把密钥。</p>
 <p style="margin:12px 0 0"><button onclick="test('asr')">测试识别</button></p><div class="res" id="res_asr"></div>
@@ -73,9 +92,12 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 
 <div class="card">
 <h2>语音合成（Azure Speech）</h2>
+<label class="own"><input type="checkbox" data-own="tts"> 这台设备单独设置</label>
+<div data-sec="tts">
 <div class="row">
  <div><label>区域</label><input type="text" id="tts_region" placeholder="eastasia"></div>
  <div><label>音色</label><input type="text" id="tts_voice" list="voices"><datalist id="voices"></datalist></div>
+</div>
 </div>
 <p class="hint"><a href="#" id="voices_btn" onclick="loadVoices();return false">刷新完整音色列表</a>（用下面的密钥向 Azure 取）。免费档每月 50 万字符。</p>
 <label>Azure Speech 密钥</label>
@@ -86,6 +108,20 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
 
 <section class="tab" id="tab-bot">
 <p class="intro">在设备的 设置 → Answers 里选 Grok Bot 时，问题会发给它。</p>
+
+<div class="card">
+<h2>什么时候问 Grok Bot</h2>
+<label class="own"><input type="checkbox" data-own="bot"> 这台设备单独设置</label>
+<div data-sec="bot">
+<label>模式</label>
+<select id="bot_mode">
+ <option value="auto">自动：设备说自己不在家的 Wi-Fi 上时才问，其余交给 Muse</option>
+ <option value="always">总是：设备发来的每一句都交给 Grok Bot</option>
+ <option value="off">关闭：这台设备不用 Grok Bot，一直交给 Muse</option>
+</select>
+</div>
+<p class="hint">下面的 Webhook、授权和回调域名是整个网关共用的。</p>
+</div>
 
 <div class="card">
 <h2>Grok Bot（Webhook 机器人）</h2>
@@ -116,25 +152,30 @@ code{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding
  <div><label>隧道网段前缀</label><input type="text" id="wg_subnet" placeholder="10.77.0."></div>
 </div>
 <h2 style="margin-top:18px">申请过隧道的设备</h2>
-<div id="peers" class="hint">还没有。</div>
-<p class="hint">把对应那行命令在 WireGuard 服务器上执行，设备就能连上。要重启后仍然有效，把 <code>[Peer]</code> 段（<code>sudo wg showconf wg0</code>）追加进 <code>wg0.conf</code>。</p>
+<div class="st" id="wg_info" style="color:var(--mute)"></div>
+<div id="wg_list"></div>
+<div class="st" id="wg_msg"></div>
+</div>
+
+<div class="card">
+<h2>给手机或电脑新建一把密钥</h2>
+<p class="hint" style="margin-top:6px">在你的浏览器里生成密钥对，私钥不会发给网关。生成后立刻显示完整的客户端配置，只显示这一次，请马上复制或下载；公钥会登记并标记为已批准，再到 WireGuard 服务器上执行对应的命令。</p>
+<div class="row" style="align-items:flex-end"><div><label>名字</label><input type="text" id="wg_new_label" placeholder="例如 我的 iPhone"></div><div style="flex:0 0 auto"><button onclick="wgNewKey()">生成并登记</button></div></div>
+<div id="wg_new_out"></div>
+</div>
+</section>
+
+<section class="tab" id="tab-devices">
+<p class="intro">已经来过网关的设备。设备要用带设备编号的固件，并在请求里带上编号（<code>d=</code> 参数或 <code>X-Device</code> 头），这里的单独设置才会对它生效。</p>
+<div class="card">
+<h2>设备</h2>
+<div id="dev_list"></div>
+<div class="st" id="dev_msg"></div>
 </div>
 </section>
 
 <section class="tab" id="tab-look">
-<p class="intro">圆屏上的头像和 Badge 图片：在这里上传，再到设备上取回。上传后立即生效，不需要点保存。</p>
-
-<div class="card">
-<h2>设备</h2>
-<p class="hint" style="margin-top:6px">头像和 Badge 图片按设备分开保存。设备第一次来取图时会自动出现在这里（设备要用带设备编号的新固件）。</p>
-<div class="row" style="align-items:flex-end">
- <div><label>当前设备</label><select id="dev_sel" onchange="devChange()"></select></div>
- <div style="flex:0 0 auto"><button onclick="devRename()">改名</button> <button onclick="devRemove()">删除设备</button></div>
-</div>
-<div class="st" id="dev_info" style="color:var(--mute)"></div>
-<p id="dev_migrate" style="display:none;margin:10px 0 0"><button onclick="devMigrate()">把旧的头像和图片分给这台设备</button> <span class="hint">复制一份，旧的那套保留，旧固件继续用它。</span></p>
-<div class="st" id="dev_msg"></div>
-</div>
+<p class="intro">圆屏上的头像和 Badge 图片：在这里上传，再到设备上取回。上传后立即生效，不需要点保存。对象由页面最上面的“设置对象”决定；选“全局默认”时是没有设备编号的旧固件用的那一套。</p>
 
 <div class="card">
 <h2>头像</h2>
@@ -174,60 +215,76 @@ const api = (path, opt) => fetch(path + (path.includes("?") ? "&" : "?") + "k=" 
 const SECRETS = ["azure_key", "grokbot_url", "grokbot_auth"];
 let ORIGIN = location.origin;
 
+// ---- which settings the page is showing: "" = the global ones, otherwise one gadget's (its overrides on top of the global ones) ----
+const SEC_FIELDS = {
+  asr: ["asr_provider", "asr_language"],
+  tts: ["tts_region", "tts_voice"],
+  bot: ["bot_mode"]
+};
+const SECS = Object.keys(SEC_FIELDS);
+const SEC_NAME = { asr: "识别", tts: "合成", bot: "Grok Bot" };
+let SCOPE = "";
+try { SCOPE = localStorage.getItem("scope") || ""; } catch (e) {}
+let DEV = SCOPE, DEVS = [], LEGACY = {}, WG = null, state = null;
+const kq = () => "k=" + encodeURIComponent(K);
+const devQ = () => (DEV ? "&d=" + encodeURIComponent(DEV) : "");
+const BADGE_MAX = 9, BADGE_SIZE = 466, AV = 233;
+const ago = (t) => { if (!t) return "还没来过"; const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return s < 90 ? "刚刚" : s < 5400 ? Math.round(s / 60) + " 分钟前" : s < 172800 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前"; };
+const agoIso = (s) => ago(s ? Math.floor(Date.parse(s) / 1000) : 0);
+function el(tag, props, kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) { if (k === "text") e.textContent = v; else if (k === "class") e.className = v; else if (k.startsWith("on")) e[k] = v; else e.setAttribute(k, v); }
+  for (const c of kids || []) e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  return e;
+}
+function copyText(t, msgId) {
+  const done = () => { if (msgId) $(msgId).textContent = "已复制。"; };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(t).then(done, () => {}); return; }
+  const ta = document.createElement("textarea"); ta.value = t; ta.style.cssText = "position:fixed;opacity:0"; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { if (msgId) $(msgId).textContent = "复制失败，请手动选中文字。"; }
+  ta.remove();
+}
+
+
+function fillSec(sec, c) {
+  if (sec === "asr") { $("asr_provider").value = c.asr.provider; $("asr_language").value = c.asr.language || ""; }
+  if (sec === "tts") { $("tts_region").value = c.tts.region || ""; $("tts_voice").value = c.tts.voice || ""; }
+  if (sec === "bot") $("bot_mode").value = (c.bot && c.bot.mode) || "auto";
+}
+function setOwn(sec, own) {   // own: this gadget has its own values here; otherwise the fields show the global ones and are locked
+  const locked = !!SCOPE && !own;
+  for (const id of SEC_FIELDS[sec]) $(id).disabled = locked;
+  document.querySelector('[data-sec="' + sec + '"]').classList.toggle("dis", locked);
+}
+document.addEventListener("change", (ev) => {
+  const sec = ev.target.dataset && ev.target.dataset.own;
+  if (!sec) return;
+  if (!ev.target.checked) fillSec(sec, state.global);
+  setOwn(sec, ev.target.checked);
+});
+
 function fill(d) {
+  state = d;
   const c = d.config;
   ORIGIN = d.origin || location.origin;
-  $("asr_provider").value = c.asr.provider; $("asr_language").value = c.asr.language || "";
-  $("tts_region").value = c.tts.region || ""; $("tts_voice").value = c.tts.voice || "";
+  document.body.classList.toggle("dev", !!SCOPE);
+  for (const sec of SECS) {
+    fillSec(sec, c);
+    const own = !!SCOPE && (d.over || []).includes(sec);
+    document.querySelector('[data-own="' + sec + '"]').checked = own;
+    setOwn(sec, own);
+  }
   $("bot_callback_base").value = c.bot.callback_base || "";
   $("wg_server_pub").value = c.wg.server_pub || ""; $("wg_endpoint").value = c.wg.endpoint || "";
   $("wg_port").value = c.wg.port || ""; $("wg_subnet").value = c.wg.subnet || "";
+  for (const id of ["bot_callback_base", "wg_server_pub", "wg_endpoint", "wg_port", "wg_subnet"]) $(id).disabled = !!SCOPE;   // deployment-wide
   for (const n of SECRETS) $("st_" + n).textContent = d.secrets[n] || "还没有设置";
   $("urls").innerHTML = ["chat", "tts", "stt"].map((p) => "<code>" + ORIGIN + "/" + p + "?k=…</code>").join("<br>");
+
   $("b_ai").textContent = d.binding.ai ? "Workers AI 绑定：有" : "Workers AI 绑定：没有"; $("b_ai").className = "badge" + (d.binding.ai ? " ok" : "");
   $("b_admin").textContent = d.binding.admin_token ? "管理令牌：独立（设备令牌打不开这个页面）" : "管理令牌：没设置，设备令牌也能打开这个页面（建议设置 ADMIN_TOKEN）"; $("b_admin").className = "badge" + (d.binding.admin_token ? " ok" : "");
   $("b_do").textContent = d.binding.durable ? "Durable Object：有" : "Durable Object：没有（回调会有延迟）"; $("b_do").className = "badge" + (d.binding.durable ? " ok" : "");
   $("cbhost").textContent = new URL(c.bot.callback_base || ORIGIN).hostname;
-  const peers = d.peers || [];
-  $("peers").innerHTML = peers.length ? peers.map((p) => '<div class="peer"><b>' + p.ip + "</b> · " + (p.ok ? "已批准" : "待批准（一周内不批准会被忘掉）") + " · 申请于 " + new Date(p.at).toLocaleString() +
-    "<code>" + p.cmd + '</code><button onclick="copyCmd(this)">复制命令</button> ' +
-    (p.ok ? "" : '<button onclick="peerAct(\'approve\', \'' + p.pub + '\')">标记为已批准</button> ') +
-    '<button onclick="peerAct(\'revoke\', \'' + p.pub + '\')">吊销并释放地址</button></div>').join("") : "还没有。";
-}
-async function peerAct(action, pub) {
-  if (action === "revoke" && !confirm("吊销这把公钥并释放它的地址？别忘了在 WireGuard 服务器上也删掉它：sudo wg set wg0 peer '" + pub + "' remove")) return;
-  await fetch("/admin/wg?k=" + encodeURIComponent(K), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, pub }) });
-  load();
-}
-async function copyCmd(btn) {
-  const t = btn.previousSibling.textContent;
-  try { await navigator.clipboard.writeText(t); btn.textContent = "已复制"; }
-  catch (e) {
-    const r = document.createRange(); r.selectNodeContents(btn.previousSibling);
-    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
-    btn.textContent = document.execCommand("copy") ? "已复制" : "没能自动复制，已选中，请按 ⌘C / Ctrl+C";
-  }
-}
-async function load() {
-  const d = await api("/admin/api");
-  if (d.error) { $("msg").textContent = d.error; return; }
-  fill(d);
-}
-function config() {
-  return {
-    asr: { provider: $("asr_provider").value, language: $("asr_language").value.trim() },
-    tts: { region: $("tts_region").value.trim(), voice: $("tts_voice").value.trim() },
-    bot: { callback_base: $("bot_callback_base").value.trim() },
-    wg: { server_pub: $("wg_server_pub").value.trim(), endpoint: $("wg_endpoint").value.trim(), port: +$("wg_port").value || 51820, subnet: $("wg_subnet").value.trim() || "10.77.0." },
-  };
-}
-async function save() {
-  $("save").disabled = true; $("msg").textContent = "保存中…";
-  const secrets = {};
-  for (const n of SECRETS) if ($("k_" + n).value.trim()) secrets[n] = $("k_" + n).value.trim();
-  const r = await api("/admin/api", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ config: config(), secrets }) });
-  $("save").disabled = false;
-  if (r.ok) { for (const n of SECRETS) $("k_" + n).value = ""; $("msg").textContent = "已保存"; load(); } else $("msg").textContent = r.error || "保存失败";
 }
 async function test(service) {
   const box = $("res_" + service); box.style.display = "block"; box.textContent = "测试中…";
@@ -246,52 +303,184 @@ async function loadVoices() {
   $("voices").innerHTML = d.voices.map((v) => "<option value='" + v.n + "'>" + v.d + "</option>").join("");
   $("msg").textContent = "已载入 " + d.voices.length + " 个音色，点音色框选择";
 }
-const BADGE_MAX = 9, BADGE_SIZE = 466, AV = 233;
-let DEV = "", DEVS = [], LEGACY = {};
-let LEGACY_CHOSEN = false;   // the person picked the older single set on purpose
-try { const sv = localStorage.getItem("dev") || ""; if (sv === "legacy") LEGACY_CHOSEN = true; else DEV = sv; } catch (e) {}
-const devQ = () => (DEV ? "&d=" + encodeURIComponent(DEV) : "");
-const kq = () => "k=" + encodeURIComponent(K);
-const ago = (t) => { if (!t) return "还没来过"; const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return s < 90 ? "刚刚" : s < 5400 ? Math.round(s / 60) + " 分钟前" : s < 172800 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前"; };
+async function load() {
+  const d = await api("/admin/api" + (SCOPE ? "?d=" + encodeURIComponent(SCOPE) : ""));
+  if (d.error === "unknown device" && SCOPE) { setScope("", true); return load(); }   // the gadget was removed
+  if (d.error) { $("msg").textContent = d.error; return; }
+  fill(d);
+}
+function config() {
+  return {
+    asr: { provider: $("asr_provider").value, language: $("asr_language").value.trim() },
+    tts: { region: $("tts_region").value.trim(), voice: $("tts_voice").value.trim() },
+    bot: { callback_base: $("bot_callback_base").value.trim(), mode: $("bot_mode").value },
+    wg: { server_pub: $("wg_server_pub").value.trim(), endpoint: $("wg_endpoint").value.trim(), port: +$("wg_port").value || 51820, subnet: $("wg_subnet").value.trim() || "10.77.0." },
+  };
+}
+async function save() {
+  $("save").disabled = true; $("msg").textContent = "保存中…";
+  const secrets = {};
+  for (const n of SECRETS) if ($("k_" + n).value.trim()) secrets[n] = $("k_" + n).value.trim();
+  const over = SECS.filter((s) => document.querySelector('[data-own="' + s + '"]').checked);
+  const post = (qs, body) => api("/admin/api" + qs, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  let r;
+  if (SCOPE) {   // a gadget: its own sections only; the keys are global and go separately
+    r = await post("?d=" + encodeURIComponent(SCOPE), { config: config(), over });
+    if (r.ok && Object.keys(secrets).length) r = await post("", { secrets });
+  } else r = await post("", { config: config(), secrets });
+  $("save").disabled = false;
+  if (r.ok) { for (const n of SECRETS) $("k_" + n).value = ""; $("msg").textContent = SCOPE ? "已保存这台设备的设置" : "已保存"; load(); loadDevices(); } else $("msg").textContent = r.error || "保存失败";
+}
 
+// ---- gadgets ----
 async function loadDevices() {
-  const r = await fetch("/admin/devices?" + kq()); const d = await r.json();
+  const d = await api("/admin/devices");
   DEVS = d.devices || []; LEGACY = d.legacy || {};
-  const sel = $("dev_sel"); sel.innerHTML = "";
-  for (const x of DEVS) { const o = document.createElement("option"); o.value = x.d; o.textContent = x.name + " · " + ago(x.last_seen); sel.appendChild(o); }
-  const o = document.createElement("option"); o.value = ""; o.textContent = "旧的单套数据（没有设备编号的旧固件用）"; sel.appendChild(o);
-  if (DEV && !DEVS.find((x) => x.d === DEV)) DEV = "";
-  if (!DEV && !LEGACY_CHOSEN && DEVS.length) DEV = DEVS[0].d;   // start on a real device, never on the older set unless it was chosen
-  sel.value = DEV; devInfo();
+  if (SCOPE && !DEVS.find((x) => x.d === SCOPE)) setScope("", true);
+  const sel = $("scope_sel"); sel.innerHTML = "";
+  sel.appendChild(el("option", { value: "", text: "全局默认（也是没有设备编号的旧固件用的那一套图）" }));
+  for (const x of DEVS) sel.appendChild(el("option", { value: x.d, text: x.name + " · " + ago(x.last_seen) }));
+  sel.value = SCOPE;
+  const x = DEVS.find((y) => y.d === SCOPE);
+  $("scope_info").textContent = x ? x.d : "对所有设备生效，除非某台设备单独设置了";
+  renderDevices();
 }
-function devInfo() {
-  const x = DEVS.find((y) => y.d === DEV);
-  $("dev_info").textContent = x ? x.d + " · 最近在线 " + ago(x.last_seen) + " · " + x.badges + " 张 Badge" + (x.avatar ? "，有头像" : "，没有头像") : "没有设备编号的旧固件取的是这一套。";
-  const showMig = !!DEV && (LEGACY.badges || LEGACY.avatar) && x && !x.badges && !x.avatar;
-  $("dev_migrate").style.display = showMig ? "block" : "none";
+function setScope(v, quiet) {
+  SCOPE = DEV = v;
+  try { localStorage.setItem("scope", v); } catch (e) {}
+  if (!quiet) { load(); loadBadges(); avatarShow(); loadDevices(); }
 }
-function devChange() { DEV = $("dev_sel").value; LEGACY_CHOSEN = !DEV; try { localStorage.setItem("dev", DEV || "legacy"); } catch (e) {} devInfo(); loadBadges(); avatarShow(); }
-async function devRename() {
-  if (!DEV) { $("dev_msg").textContent = "旧的单套数据没有名字。"; return; }
-  const x = DEVS.find((y) => y.d === DEV); const name = prompt("设备名字", x ? x.name : ""); if (!name) return;
-  const r = await (await fetch("/admin/device?" + kq(), { method: "POST", body: JSON.stringify({ d: DEV, name }) })).json();
+function scopeChange() { setScope($("scope_sel").value); }
+
+function renderDevices() {
+  const box = $("dev_list"); box.innerHTML = "";
+  if (!DEVS.length) { box.textContent = "还没有设备来过。设备第一次取图或说话时会自动出现在这里。"; return; }
+  const ipOf = (pub) => { const p = WG && WG.peers.find((q) => q.pub === pub); return p ? p.ip : ""; };
+  for (const x of DEVS) {
+    const chips = [];
+    if (x.over.length) for (const s of x.over) chips.push(el("span", { class: "chip warn", text: "单独：" + (SEC_NAME[s] || s) })); else chips.push(el("span", { class: "chip", text: "全部跟随全局" }));
+    if (x.wg) chips.push(el("span", { class: "chip ok", text: "隧道 " + (ipOf(x.wg) || "已分配") }));
+    chips.push(el("span", { class: "chip", text: x.badges + " 张 Badge" + (x.avatar ? "，有头像" : "") }));
+    const btns = el("div", { class: "btns" }, [
+      el("button", { text: "设置这台设备", onclick: () => { setScope(x.d); location.hash = "#answer"; } }),
+      el("button", { text: "改名", onclick: () => devRename(x.d) }),
+      el("button", { text: "删除", onclick: () => devRemove(x.d) })
+    ]);
+    if ((LEGACY.badges || LEGACY.avatar) && !x.badges && !x.avatar) btns.appendChild(el("button", { text: "把旧的头像和图片分给它", onclick: () => devMigrate(x.d) }));
+    box.appendChild(el("div", { class: "devrow" }, [el("b", { text: x.name }), " ", el("span", { class: "mono", text: x.d + " · 最近在线 " + ago(x.last_seen) }), el("div", { style: "margin-top:6px" }, chips), btns]));
+  }
+}
+async function devRename(d) {
+  const x = DEVS.find((y) => y.d === d); const name = prompt("设备名字", x ? x.name : ""); if (!name) return;
+  const r = await api("/admin/device", { method: "POST", body: JSON.stringify({ d, name }) });
   $("dev_msg").textContent = r.ok ? "已改名。" : (r.error || "失败"); await loadDevices();
 }
-async function devRemove() {
-  if (!DEV) { $("dev_msg").textContent = "旧的单套数据不能在这里删除。"; return; }
-  if (!confirm("删除这台设备，以及它的头像和 Badge 图片？它下次来取图时会重新出现，但图片没了。")) return;
-  const r = await (await fetch("/admin/device?" + kq(), { method: "POST", body: JSON.stringify({ d: DEV, remove: true }) })).json();
-  $("dev_msg").textContent = r.ok ? "已删除。" : (r.error || "失败"); DEV = ""; await loadDevices(); loadBadges(); avatarShow();
+async function devRemove(d) {
+  if (!confirm("删除这台设备，以及它的头像、Badge 图片和单独设置？它下次来的时候会重新出现，但这些没了。")) return;
+  const r = await api("/admin/device", { method: "POST", body: JSON.stringify({ d, remove: true }) });
+  $("dev_msg").textContent = r.ok ? "已删除。" : (r.error || "失败");
+  if (SCOPE === d) setScope("", true);
+  await loadDevices(); load(); loadBadges(); avatarShow();
 }
-async function devMigrate() {
-  const r = await (await fetch("/admin/migrate?d=" + encodeURIComponent(DEV) + "&" + kq(), { method: "POST" })).json();
+async function devMigrate(d) {
+  const r = await api("/admin/migrate?d=" + encodeURIComponent(d), { method: "POST" });
   $("dev_msg").textContent = r.ok ? "已分给这台设备：" + (r.avatar ? "头像，" : "") + r.badges + " 张 Badge。" : (r.error || "失败");
   await loadDevices(); loadBadges(); avatarShow();
 }
 
-// A picture is shown through the round screen. The crop is kept as a zoom (1 fills the screen with the picture's shorter side;
-// less than 1 shows more of it, with black around) and a centre in the picture's own pixels; dragging moves the centre, the
-// slider changes the zoom. Whatever the editor shows is what is uploaded: renderCrop makes the final square, corners black.
+// ---- WireGuard ----
+async function loadWg() {
+  WG = await api("/admin/wg");
+  renderWg(); renderDevices();
+}
+function wgBlock(c, p) { return "[Peer]\n# " + (p.label || "device") + "\nPublicKey = " + p.pub + "\nAllowedIPs = " + p.ip + "/32\n"; }
+function wgClient(c, p, priv) {
+  return "[Interface]\nPrivateKey = " + (priv || "<这台设备的私钥>") + "\nAddress = " + p.ip + "/24\n\n[Peer]\nPublicKey = " + c.server_pub +
+    "\nEndpoint = " + (c.endpoint.includes(":") ? "[" + c.endpoint + "]" : c.endpoint) + ":" + c.port + "\nAllowedIPs = " + c.subnet + "0/24\nPersistentKeepalive = 25\n";
+}
+async function wgPost(body) {
+  const r = await api("/admin/wg", { method: "POST", body: JSON.stringify(body) });
+  $("wg_msg").textContent = r.ok ? "已更新。" : (r.error || "失败"); await loadWg(); return r;
+}
+function wgShow(holder, title, text) {
+  holder.innerHTML = "";
+  const pre = el("pre", { class: "cfg", text }), msg = el("span", { class: "hint" });
+  holder.appendChild(el("div", { class: "hint", text: title })); holder.appendChild(pre);
+  holder.appendChild(el("div", { class: "btns" }, [el("button", { text: "复制", onclick: () => { copyText(text, null); msg.textContent = "已复制（没反应的话请手动选中文字）。"; } }), msg]));
+}
+function renderWg() {
+  const box = $("wg_list"); box.innerHTML = "";
+  if (!WG || !WG.conf) { $("wg_info").textContent = "这个网关没有启用 WireGuard 登记。"; return; }
+  const c = WG.conf;
+  $("wg_info").textContent = "服务器 " + c.endpoint + ":" + c.port + "，隧道网段 " + c.subnet + "0/24。批准后，在 WireGuard 服务器上执行“服务器命令”那一行（立即生效，重启后丢失），并把“服务器配置块”追加到 /etc/wireguard/wg0.conf（长期保留）。";
+  if (!WG.peers.length) { box.textContent = "还没有设备登记过密钥。"; return; }
+  const peers = [...WG.peers].sort((a, b) => (SCOPE && (b.device === SCOPE) - (a.device === SCOPE)) || a.n - b.n);
+  for (const p of peers) {
+    const out = el("div");
+    const sel = el("select", { style: "width:auto;display:inline-block;padding:3px 8px", onchange: () => wgPost({ action: "assign", pub: p.pub, d: sel.value }) },
+      [el("option", { value: "", text: "不属于任何设备" }), ...DEVS.map((x) => el("option", { value: x.d, text: x.name }))]);
+    sel.value = p.device;
+    const btns = el("div", { class: "btns" }, [
+      ...(p.ok ? [] : [el("button", { class: "pri", text: "批准", onclick: () => wgPost({ action: "approve", pub: p.pub }) })]),
+      el("button", { text: "改名", onclick: () => { const l = prompt("这把密钥的名字", p.label); if (l !== null) wgPost({ action: "label", pub: p.pub, label: l }); } }),
+      el("button", { text: "服务器命令", onclick: () => wgShow(out, "在 WireGuard 服务器上执行（立即生效）", p.cmd) }),
+      el("button", { text: "服务器配置块", onclick: () => wgShow(out, "追加到服务器的 /etc/wireguard/wg0.conf", wgBlock(c, p)) }),
+      el("button", { text: "客户端配置", onclick: () => wgShow(out, "客户端配置模板。设备自己生成的密钥，私钥只在设备上（设备屏幕上的 Get config）；电脑或手机的话把私钥填进去", wgClient(c, p, "")) }),
+      el("button", { text: "撤销", onclick: () => { if (confirm("撤销这把密钥？网关会忘掉它；服务器上的 peer 要另外删。")) wgPost({ action: "revoke", pub: p.pub }); } })
+    ]);
+    box.appendChild(el("div", { class: "peer" }, [
+      el("b", { text: p.label || "（未命名）" }), " ", el("span", { class: "mono", text: p.ip }), " ",
+      el("span", { class: "chip " + (p.ok ? "ok" : "warn"), text: p.ok ? "已批准" : "待批准" }), el("span", { class: "chip", text: "登记于 " + agoIso(p.at) }),
+      el("div", { class: "mono", text: p.pub }), el("div", { style: "margin-top:6px" }, [el("span", { class: "hint", text: "属于设备：" }), sel]), btns, out
+    ]));
+  }
+}
+
+// X25519 (RFC 7748) with BigInt: the page is served over plain http on the LAN, where WebCrypto is not available.
+const P25519 = (1n << 255n) - 19n;
+const modp = (a) => ((a % P25519) + P25519) % P25519;
+function powmod(b, e) { let r = 1n; b = modp(b); while (e > 0n) { if (e & 1n) r = modp(r * b); b = modp(b * b); e >>= 1n; } return r; }
+function leToBig(u8) { let n = 0n; for (let i = u8.length - 1; i >= 0; i--) n = (n << 8n) | BigInt(u8[i]); return n; }
+function bigToLe(n) { const o = new Uint8Array(32); for (let i = 0; i < 32; i++) { o[i] = Number(n & 255n); n >>= 8n; } return o; }
+function x25519(k32, u32) {
+  const k = Uint8Array.from(k32); k[0] &= 248; k[31] &= 127; k[31] |= 64;
+  const kn = leToBig(k), x1 = leToBig(u32) & ((1n << 255n) - 1n);
+  let x2 = 1n, z2 = 0n, x3 = x1, z3 = 1n, swap = 0n;
+  for (let t = 254n; t >= 0n; t--) {
+    const kt = (kn >> t) & 1n; swap ^= kt;
+    if (swap) { [x2, x3] = [x3, x2]; [z2, z3] = [z3, z2]; }
+    swap = kt;
+    const A = modp(x2 + z2), AA = modp(A * A), B = modp(x2 - z2), BB = modp(B * B), E = modp(AA - BB);
+    const C = modp(x3 + z3), D = modp(x3 - z3), DA = modp(D * A), CB = modp(C * B);
+    x3 = modp((DA + CB) ** 2n); z3 = modp(x1 * modp((DA - CB) ** 2n));
+    x2 = modp(AA * BB); z2 = modp(E * modp(AA + 121665n * E));
+  }
+  if (swap) { [x2, x3] = [x3, x2]; [z2, z3] = [z3, z2]; }
+  return bigToLe(modp(x2 * powmod(z2, P25519 - 2n)));
+}
+const b64 = (u8) => btoa(String.fromCharCode(...u8));
+function wgKeyPair() {
+  const priv = crypto.getRandomValues(new Uint8Array(32)); priv[0] &= 248; priv[31] &= 127; priv[31] |= 64;
+  const base = new Uint8Array(32); base[0] = 9;
+  return { priv: b64(priv), pub: b64(x25519(priv, base)) };
+}
+async function wgNewKey() {
+  const label = $("wg_new_label").value.trim();
+  if (!label) { $("wg_msg").textContent = "先给它起个名字。"; return; }
+  const kp = wgKeyPair();
+  const r = await wgPost({ action: "add", pub: kp.pub, label });
+  if (!r.ok) return;
+  const p = WG.peers.find((q) => q.pub === kp.pub);
+  const out = $("wg_new_out"); out.innerHTML = "";
+  const conf = wgClient(WG.conf, p, kp.priv);
+  wgShow(out, "客户端配置（含私钥，只显示这一次）", conf);
+  out.appendChild(el("div", { class: "btns" }, [
+    el("button", { text: "下载 .conf", onclick: () => { const a = el("a", { href: URL.createObjectURL(new Blob([conf], { type: "text/plain" })), download: label.replace(/[^\w-]+/g, "_") + ".conf" }); a.click(); } })
+  ]));
+  out.appendChild(el("div", { class: "hint", text: "在 WireGuard 服务器上执行：" })); out.appendChild(el("pre", { class: "cfg", text: p.cmd }));
+  $("wg_new_label").value = "";
+}
+
 function newEditor(src, bias) {
   const w = src.width, h = src.height, side = Math.min(w, h);
   return { src, zoom: 1, cx: w / 2, cy: (h - side) * bias + side / 2, bias };
@@ -431,11 +620,10 @@ async function avatarDelete() {
   await fetch("/avatar/delete?" + kq() + devQ(), { method: "POST" });
   loadDevices(); avatarShow();
 }
-async function lookInit() { await loadDevices(); loadBadges(); avatarShow(); }
-load();
-lookInit();
+async function init() { await loadDevices(); await load(); loadWg(); loadBadges(); avatarShow(); }
+init();
 
-const TAB_IDS = ["overview", "voice", "bot", "network", "look"], SAVE_TABS = ["voice", "bot", "network"];
+const TAB_IDS = ["overview", "voice", "bot", "network", "devices", "look"], SAVE_TABS = ["voice", "bot", "network"];
 function showTab(id) {
   if (!TAB_IDS.includes(id)) id = TAB_IDS[0];
   for (const t of TAB_IDS) document.getElementById("tab-" + t).classList.toggle("on", t === id);
@@ -446,6 +634,7 @@ function showTab(id) {
 }
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 showTab(location.hash.slice(1));
+
 </script>
 </body>
 </html>

@@ -40,6 +40,16 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 
 Saving merges by section, so only the section you changed is changed. **A saved change takes up to about a minute to take effect**, because Cloudflare KV reads are cached. Keys saved on the page are kept in the KV of your own Cloudflare account (as plain text; the page shows only the last four characters). A stricter way is `wrangler secret put AZURE_SPEECH_KEY`, `GROKBOT_URL`, `GROKBOT_AUTH` (the gateway reads these environment variables too, and the WireGuard server details can be given as `WG_SERVER_PUB`, `WG_ENDPOINT`, `WG_PORT`, `WG_SUBNET`).
 
+## Settings per device and WireGuard management
+
+The page has a "settings for" selector at the top: the global defaults, or one gadget. A gadget can override three sections: recognition (`asr`: provider, language), synthesis (`tts`: region, voice) and the bot mode (`bot.mode`: `auto`, `always`, `off`). A section it does not override follows the global value, and a gadget with no overrides at all behaves exactly as before. Overrides are KV `devcfg:<id>`. The Webhook address and authorization, the callback domain, the Azure key and the WireGuard server details stay global (the page locks them while a gadget is selected).
+
+Bot mode: `auto` is the old rule (the bot answers only when the device says it is away from home, anything else is for Muse), `always` sends every question that reaches `/chat` to the bot, `off` never does (Muse answers).
+
+A gadget is recognised on `/stt`, `/chat` and `/tts` by `d=<node id>` or an `X-Device: homelink-xxxxxx` header, after its token was checked. **A firmware that sends neither, such as the stock patch, is not recognised and uses the global settings**, so per-device settings only take effect once the firmware puts its node id in those requests (avatar and badge pictures already use `d=`).
+
+The WireGuard tab lists the keys that asked for a tunnel. Each can be labelled, assigned to a gadget, approved (a mark in the registry only) or revoked, and the page shows the `wg set` line, the `[Peer]` block to append to `wg0.conf`, and a client config template (a key the device made itself has its private key only on the device). "New key" makes an X25519 key pair in the browser, registers and approves the public key, and shows the full client config once; the private key is never sent to the gateway. The page works over plain http, so the key generator is plain JavaScript (BigInt) instead of WebCrypto. Putting the peer on the WireGuard server stays a manual step. Calls: `GET /admin/api?d=<id>`, `POST /admin/api?d=<id>` (body `{config, over: ["asr","tts","bot"]}`), `GET /admin/wg`, `POST /admin/wg` (`approve`, `revoke`, `label`, `assign`, `add`), `GET /admin/wg/conf?pub=…&type=server|client`.
+
 ## Protections
 
 - Requests have size limits: `/stt` 2 MB, `/tts` 600 characters, `/chat` 1000 characters, the picture 120 KB. Anything larger gets `413`.
@@ -70,6 +80,7 @@ The gateway **first** makes the device say the acknowledgement, then sends the W
 | What | Status |
 |---|---|
 | Deployed to a free Cloudflare account; recognition (Whisper and Azure), synthesis, the settings page and its calls, a real bot, WireGuard enrolment | Passed |
+| Settings per device and the WireGuard tab (2026-10-24): the Worker run locally with workerd and its calls tested, the page clicked through in a browser (device switch, lock and unlock, save, new key) | Passed locally; not yet deployed to a Cloudflare Worker, not tested with a device that sends its id |
 | The settings page clicked through item by item in a browser (desktop and phone width) | Passed (the clipboard content of the copy button could not be confirmed; if copying fails it selects the text and tells you) |
 | A real bot through a free Cloudflare account: the acknowledgement comes at once, the answer in about 11 to 22 seconds, and the Worker's CPU time for that part is only 1 to 4 ms | Passed (requested directly from the Worker, and once as a full Muse turn on the device) |
 | A full Muse turn on the device (cloud-only build, every request going only to the Worker): a 1,469-character answer fetched as 11 pieces of speech, 94 seconds of speech, 112 seconds in all, no CPU limit exceeded | Passed |

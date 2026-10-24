@@ -16,13 +16,22 @@ import adminHtml from "./admin.html";
 const DEFAULTS = {
   asr: { provider: "cloudflare", language: "zh-CN" },
   tts: { voice: "zh-CN-XiaoxiaoMultilingualNeural", region: "eastasia" },
-  bot: { callback_base: "" },
+  bot: { callback_base: "", mode: "auto" },   // mode: "auto" (the bot answers when the device says it is away), "always", "off"
   wg: { server_pub: "", endpoint: "", port: 51820, subnet: "10.77.0." },
 };
+// A gadget can override these parts of the settings (KV "devcfg:<id>"); what it does not override follows the global values.
+// callback_base belongs to the deployment, so for the bot only "mode" can be overridden.
+const DEV_SECTIONS = ["asr", "tts", "bot"];
+const DEV_FIELDS = { asr: ["provider", "language"], tts: ["voice", "region"], bot: ["mode"] };
 const SECRET_ENV = { azure_key: "AZURE_SPEECH_KEY", grokbot_url: "GROKBOT_URL", grokbot_auth: "GROKBOT_AUTH" };
 const ENV_CONFIG = { "wg.server_pub": "WG_SERVER_PUB", "wg.endpoint": "WG_ENDPOINT", "wg.port": "WG_PORT", "wg.subnet": "WG_SUBNET" };
 
-async function loadAll(env) {
+async function devCfgGet(env, d) {
+  const v = d && env.CFG ? await env.CFG.get("devcfg:" + d, "json").catch(() => null) : null;
+  return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+}
+// d: a gadget's id, when the call is its own (or the settings page looks at one): its overrides go on top of the global settings.
+async function loadAll(env, d) {
   let over = null, sec = null;
   try { over = env.CFG ? await env.CFG.get("config", "json") : null; } catch (e) { /* defaults */ }
   try { sec = env.CFG ? await env.CFG.get("secrets", "json") : null; } catch (e) { /* env only */ }
@@ -34,7 +43,10 @@ async function loadAll(env) {
   }
   const S = {};
   for (const [name, envName] of Object.entries(SECRET_ENV)) S[name] = (sec && sec[name]) || env[envName] || "";
-  return { cfg, S, stored: sec || {}, over: over || {}, AI: env.AI || null };   // AI: the Workers AI binding of this request ([ai] binding = "AI" in wrangler.toml)
+  const global = JSON.parse(JSON.stringify(cfg));
+  const dev = await devCfgGet(env, d);
+  for (const k of DEV_SECTIONS) if (dev[k]) cfg[k] = { ...cfg[k], ...dev[k] };
+  return { cfg, S, global, dev, stored: sec || {}, over: over || {}, AI: env.AI || null };   // AI: the Workers AI binding of this request ([ai] binding = "AI" in wrangler.toml)
 }
 
 const text = (s, status = 200, type = "text/plain; charset=utf-8") => new Response(s, { status, headers: { "content-type": type } });
@@ -328,11 +340,13 @@ async function botAsk(req, env, all, ask) {
 }
 
 // /chat: with "away" the question goes to the bot; anything else is for Muse itself (the firmware asks Muse when this says so).
+// The gadget's bot mode changes that: "always" sends every question to the bot, "off" never does.
 async function chat(req, env, all) {
   const { text: userText, away } = await req.json().catch(() => ({}));
   if (!userText || typeof userText !== "string") return json({ error: "no text" }, 400);
   if (userText.length > MAX_CHAT_CHARS) return tooLarge();
-  if (!away) return json({ muse: true }, 503);
+  const mode = all.cfg.bot.mode;
+  if (mode === "off" || !(away || mode === "always")) return json({ muse: true }, 503);
   const enc = new TextEncoder();
   return new Response(new ReadableStream({
     async start(ctl) {
@@ -390,6 +404,12 @@ export class WgRegistry {
       return Response.json({ n: p.n });
     }
     if (path === "/list") return Response.json({ peers });
+    if (path === "/label") {
+      if (!peers[b.pub]) return Response.json({ error: "unknown key" }, { status: 404 });
+      peers[b.pub].label = String(b.label || "").trim().slice(0, 40);
+      await this.state.storage.put("peers", peers);
+      return Response.json({ ok: true });
+    }
     if (path === "/approve" || path === "/revoke") {
       if (!peers[b.pub]) return Response.json({ error: "unknown key" }, { status: 404 });
       if (path === "/approve") peers[b.pub].ok = true; else delete peers[b.pub];
@@ -426,7 +446,17 @@ async function wgEnroll(req, env, all) {
 async function wgList(env, W) {
   if (!env.WG) return [];
   const { peers } = await (await reg(env, "list")).json();
-  return Object.entries(peers).sort((a, b) => a[1].n - b[1].n).map(([pub, p]) => ({ pub, ip: W.subnet + p.n, at: p.at, ok: !!p.ok, cmd: `sudo wg set wg0 peer '${pub}' allowed-ips ${W.subnet}${p.n}/32` }));
+  return Object.entries(peers).sort((a, b) => a[1].n - b[1].n).map(([pub, p]) => ({ pub, n: p.n, ip: W.subnet + p.n, at: p.at, ok: !!p.ok, label: p.label || "", cmd: `sudo wg set wg0 peer '${pub}' allowed-ips ${W.subnet}${p.n}/32` }));
+}
+// What goes into the WireGuard server's wg0.conf for a peer, and a client config for the same peer. A key pair the device made
+// itself has its private key only on the device, so the client text has a placeholder where the private key goes.
+function wgServerBlock(p) {
+  return `[Peer]\n# ${p.label || "device"}\nPublicKey = ${p.pub}\nAllowedIPs = ${p.ip}/32\n`;
+}
+function wgClientConf(W, p) {
+  const ep = W.endpoint.includes(":") ? `[${W.endpoint}]` : W.endpoint;
+  return `[Interface]\nPrivateKey = <this device's private key>\nAddress = ${p.ip}/24\n\n[Peer]\nPublicKey = ${W.server_pub}\nEndpoint = ${ep}:${W.port}\n` +
+    `AllowedIPs = ${W.subnet}0/24\nPersistentKeepalive = 25\n`;
 }
 
 // ---- devices, avatar and badge pictures ---------------------------------------------------------------
@@ -559,7 +589,8 @@ async function adminDevices(env) {
   const devs = await devicesGet(env);
   const out = [];
   for (const [d, e] of Object.entries(devs)) {
-    out.push({ d, name: e.name || d, first_seen: e.first_seen || 0, last_seen: e.last_seen || 0,
+    out.push({ d, name: e.name || d, first_seen: e.first_seen || 0, last_seen: e.last_seen || 0, wg: e.wg_pub || "",
+      over: Object.keys(await devCfgGet(env, d)),
       badges: (await badgeIndex(env, d)).length, avatar: !!(await env.CFG.get(kAvatar(d), "arrayBuffer")) });
   }
   out.sort((a, b) => b.last_seen - a.last_seen);
@@ -574,6 +605,7 @@ async function adminDevice(req, env) {
     for (let n = 0; n < MAX_BADGES; n++) await env.CFG.delete(kBadge(d, n));
     await env.CFG.delete(kBadges(d));
     await env.CFG.delete(kAvatar(d));
+    await env.CFG.delete("devcfg:" + d);
     delete devs[d];
   } else if (typeof name === "string" && name.trim()) {
     devs[d].name = name.trim().slice(0, 40);
@@ -612,15 +644,32 @@ async function admin(req, env, url, all) {
   if (p === "/admin/device" && req.method === "POST") return await adminDevice(req, env);
   if (p === "/admin/migrate" && req.method === "POST") return await adminMigrate(env, url);
   if (p === "/admin" && req.method === "GET") return text(adminHtml, 200, "text/html; charset=utf-8");
+  // ?d=<gadget id>: the settings of one gadget. "config" is what applies to it (its own overrides over the global values),
+  // "global" the global values, "over" the parts it overrides. Without d it is the global settings.
   if (p === "/admin/api" && req.method === "GET") {
+    const d = devParam(url);
+    if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
+    const A = d ? await loadAll(env, d) : all;
     const secrets = {};
     for (const n of Object.keys(SECRET_ENV)) secrets[n] = mask(all.S[n]);
-    return json({ config: all.cfg, secrets, peers: await wgList(env, all.cfg.wg), binding: { ai: !!all.AI, durable: !!env.BOT, admin_token: !!env.ADMIN_TOKEN }, origin: url.origin });
+    return json({ config: A.cfg, global: d ? A.global : undefined, over: d ? Object.keys(A.dev) : undefined, secrets, peers: await wgList(env, all.cfg.wg), binding: { ai: !!all.AI, durable: !!env.BOT, admin_token: !!env.ADMIN_TOKEN }, origin: url.origin });
   }
   if (p === "/admin/api" && req.method === "POST") {
     if (!env.CFG) return json({ error: "KV not bound" }, 500);
     const body = await req.json().catch(() => ({}));
-    if (body.config) {   // merged into what is stored, section by section: a partial update never wipes the rest
+    const d = devParam(url);
+    if (d) {   // one gadget: body.over = the sections it overrides (asr, tts, bot); a section not listed follows the global values
+      if (!(await knownDevice(env, d))) return json({ error: "unknown device" }, 404);
+      const c = body.config && typeof body.config === "object" ? body.config : {}, ov = {};
+      for (const sect of Array.isArray(body.over) ? body.over : []) {
+        if (!DEV_SECTIONS.includes(sect) || !c[sect] || typeof c[sect] !== "object") continue;
+        ov[sect] = {};
+        for (const f of DEV_FIELDS[sect]) if (["string", "number"].includes(typeof c[sect][f])) ov[sect][f] = c[sect][f];
+      }
+      try { if (ov.tts && ov.tts.region) azureHost(ov.tts.region, "tts"); } catch (e) { return json({ error: "区域名不对：只能是 eastasia 这样的名字" }, 400); }
+      if (ov.bot && !["auto", "always", "off"].includes(ov.bot.mode)) ov.bot.mode = "auto";
+      if (Object.keys(ov).length) await env.CFG.put("devcfg:" + d, JSON.stringify(ov)); else await env.CFG.delete("devcfg:" + d);
+    } else if (body.config) {   // merged into what is stored, section by section: a partial update never wipes the rest
       const keep = { ...all.over };
       for (const sect of Object.keys(DEFAULTS)) {
         const c = body.config[sect];
@@ -632,6 +681,7 @@ async function admin(req, env, url, all) {
           if (sect === "bot" && keep.bot.callback_base) checkHttpsUrl(keep.bot.callback_base);
         } catch (e) { return json({ error: (sect === "tts" ? "区域名不对：只能是 eastasia 这样的名字" : "回调地址只接受公网域名上的 https 地址") }, 400); }
       }
+      if (keep.bot && keep.bot.mode && !["auto", "always", "off"].includes(keep.bot.mode)) keep.bot.mode = "auto";
       await env.CFG.put("config", JSON.stringify(keep));
     }
     if (body.secrets) {
@@ -647,11 +697,44 @@ async function admin(req, env, url, all) {
     }
     return json({ ok: true });
   }
-  if (p === "/admin/wg" && req.method === "POST") {   // {action: "approve" | "revoke", pub}
-    const { action, pub } = await req.json().catch(() => ({}));
-    if (!env.WG || !["approve", "revoke"].includes(action) || typeof pub !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(pub)) return json({ error: "bad request" }, 400);
+  if (p === "/admin/wg" && req.method === "GET") {   // the tunnel keys that asked, the gadget each is assigned to, and the server side's facts
+    if (!env.WG) return json({ peers: [], conf: null });
+    const devs = await devicesGet(env), owner = {}, W = all.cfg.wg;
+    for (const [d, e] of Object.entries(devs)) if (e.wg_pub) owner[e.wg_pub] = d;
+    const peers = (await wgList(env, W)).map((x) => ({ ...x, device: owner[x.pub] || "" }));
+    return json({ peers, conf: { endpoint: W.endpoint, port: W.port, subnet: W.subnet, server_pub: W.server_pub } });
+  }
+  // {action: "approve" | "revoke" | "label" | "assign" | "add", pub, label?, d?}. Approving only marks the key in the registry: the
+  // line to run on the WireGuard server (`wg set …`, or the [Peer] block for wg0.conf) is shown by the page and is still a person's job.
+  if (p === "/admin/wg" && req.method === "POST") {
+    const b = await req.json().catch(() => ({}));
+    const { action, pub } = b;
+    if (!env.WG || !["approve", "revoke", "label", "assign", "add"].includes(action) || typeof pub !== "string" || !/^[A-Za-z0-9+/]{43}=$/.test(pub)) return json({ error: "bad request" }, 400);
+    if (action === "add") {   // a key made elsewhere (the page's own key generator, a phone's app): enrolled and approved at once
+      const r0 = await reg(env, "enroll", { pub });
+      if (!r0.ok) return json(await r0.json().catch(() => ({})), r0.status);
+      await reg(env, "approve", { pub });
+      if (b.label) await reg(env, "label", { pub, label: b.label });
+      return json({ ok: true, n: (await r0.json()).n });
+    }
+    if (action === "label") { const r = await reg(env, "label", { pub, label: b.label }); return json(await r.json().catch(() => ({})), r.status); }
+    if (action === "assign") {   // a key belongs to at most one gadget; d "" frees it
+      const devs = await devicesGet(env);
+      if (b.d && !devs[b.d]) return json({ error: "unknown device" }, 404);
+      for (const e of Object.values(devs)) if (e.wg_pub === pub) delete e.wg_pub;
+      if (b.d) devs[b.d].wg_pub = pub;
+      await env.CFG.put("devices", JSON.stringify(devs));
+      return json({ ok: true });
+    }
+    if (action === "revoke") { const devs = await devicesGet(env); for (const e of Object.values(devs)) if (e.wg_pub === pub) delete e.wg_pub; await env.CFG.put("devices", JSON.stringify(devs)); }
     const r = await reg(env, action, { pub });
     return json(await r.json().catch(() => ({})), r.status);
+  }
+  if (p === "/admin/wg/conf" && req.method === "GET") {   // ?pub=…&type=server|client: plain text to copy
+    const pub = url.searchParams.get("pub") || "";
+    const peer = (await wgList(env, all.cfg.wg)).find((x) => x.pub === pub);
+    if (!peer) return text("unknown key", 404);
+    return text(url.searchParams.get("type") === "server" ? wgServerBlock(peer) : wgClientConf(all.cfg.wg, peer));
   }
   if (p === "/admin/voices" && req.method === "GET") {         // the vendor's full live voice list
     if (!all.S.azure_key) return json({ error: "先填 Azure Speech 密钥并保存" }, 400);
@@ -707,7 +790,10 @@ export default {
     // The settings page (admin token) also reads the badge pictures the device reads (device token) to show them.
     if (!allowed && env.ADMIN_TOKEN && req.method === "GET" && /^\/badge\/(list|\d)$/.test(url.pathname)) allowed = await safeEq(givenToken(req, url), env.ADMIN_TOKEN);
     if (!allowed) return text("forbidden", 403);
-    const all = await loadAll(env);
+    // A gadget names itself with d=<id> or the X-Device header; its own settings (recognition, voice, bot mode) then apply to /stt /chat /tts.
+    const dev = asDevice ? devParam(url) || (DEVICE_RE.test(req.headers.get("x-device") || "") ? req.headers.get("x-device") : "") : "";
+    const all = await loadAll(env, dev);
+    if (dev && ["/stt", "/chat", "/tts"].includes(url.pathname)) ctx.waitUntil(deviceSeen(env, dev).catch(() => {}));
     try {
       if (url.pathname.startsWith("/admin")) return await admin(req, env, url, all);
       if (url.pathname === "/wg/peers" && req.method === "GET") return text((await wgList(env, all.cfg.wg)).map((p) => p.cmd + "   # asked " + p.at + (p.ok ? " (approved)" : "")).join("\n") + "\n");
