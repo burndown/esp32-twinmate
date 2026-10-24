@@ -23,6 +23,7 @@ jobs:
       - run: node --check worker/src/index.js
       - run: python3 -m py_compile tools/muse-cloud.py tools/make-wg-config.py tools/make-avatar-img.py
       - run: worker/test/smoke.sh
+      - run: worker/test/flows.sh
 
   patch:
     name: Firmware patch applies to upstream

@@ -284,7 +284,7 @@ See the [validation record](docs/VALIDATION.md) for measurements, the initial fa
 | `worker/` | Cloudflare gateway: recognition, synthesis, bot forwarding, WireGuard enrolment, avatars and admin page |
 | `firmware/muse-cloud.patch` | Firmware patch for upstream commit `e6fe517` (the full commit id is in `firmware/UPSTREAM_BASE`) |
 | `tools/scan-private.sh` | Scans for LAN addresses, local paths, user names, tokens, private keys and MACs before a push |
-| `worker/test/smoke.sh` | Runs the gateway's smoke test locally with workerd (tokens, device registration, block and unblock, tunnel key) |
+| `worker/test/smoke.sh`, `worker/test/flows.sh` | Run the gateway's tests locally with workerd: tokens, device registration, per-device settings, block and unblock, tunnel key, and the bot mode and the error answers of `/chat`, `/stt` and `/tts` (the bot's Webhook only accepts public https addresses, so that part does not run locally; see docs/GATEWAY.md) |
 | `.github/workflows/ci.yml` | Runs on every push: the privacy scan, the gateway smoke test, and whether the patch applies to upstream |
 | `docs/` | [Gateway guide](docs/GATEWAY.md) · [Firmware guide](docs/FIRMWARE.md) · [WireGuard server setup](docs/wireguard-server.md) · [Validation record](docs/VALIDATION.md) |
 
