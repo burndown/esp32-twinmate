@@ -214,7 +214,7 @@ Badge 页需要带 badge 分区的固件（`partitions_muse_badge.csv`，4 MB，
 
 1. 网关向配置的 Webhook 地址发送 `POST`，请求头为 `Authorization: Bearer <授权凭据>`，JSON 请求体为 `{"message": "<识别出的文字>\n\n（回调说明……）"}`。
 2. 机器人从消息中复制完整回调地址，向 `https://<你的worker>.workers.dev/bot-reply/<id>/<一次性令牌>` 发送 `POST`。请求体为 `{"reply": "<答案>"}`，并设置 `Content-Type: application/json`。无需额外的授权请求头；回调地址仅可使用一次，有效期为 10 分钟。
-3. 网关先让设备播放确认提示，再保持连接等待答案，最长 270 秒。收到答案后由设备播放；超时则报告机器人未回复。
+3. 网关先让设备播放确认提示，再保持连接等待答案，最长 300 秒。收到答案后由设备播放；超时则报告机器人未回复。
 4. 如果机器人限制可访问的外部地址，需将回调地址中的 Worker 域名加入允许列表，否则回调会被拦截。
 
 Grok Bot 一次提问如何使用 KV 和 Durable Object，见 [技术细节](docs/GROK-BOT.zh-CN.md)。

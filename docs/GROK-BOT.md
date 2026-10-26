@@ -40,7 +40,7 @@ sequenceDiagram
   W->>W: id = 16 random hex + 16 hex HMAC, tok = 16 random hex
   W->>O: /init {tok}: store {tok, text: null}, alarm in 10 min
   W->>B: POST Webhook: the question and the callback address /bot-reply/{id}/{tok}
-  loop up to 90 s, in slices of at most 30 s
+  loop up to 300 s, in slices of at most 30 s
     W->>O: /wait: sleeps until an answer or the slice ends
   end
   B->>C: POST /bot-reply/{id}/{tok} {reply}
@@ -57,9 +57,9 @@ In words:
 2. It makes the question's **id** (16 random hex digits followed by 16 hex digits of an HMAC of them, keyed with the device token) and a one-time **token** (16 random hex digits).
 3. It calls the Durable Object named after the id with `/init`, which stores `{ tok, text: null }` and sets an alarm for 10 minutes.
 4. It POSTs the Webhook with `Authorization: Bearer <credentials>`. The message carries the question and the callback address `<callback host>/bot-reply/<id>/<tok>`, to be used once. A non-2xx answer or a network error ends the question with `bot_unreachable`.
-5. It waits: it asks the Durable Object `/wait` in slices of up to 30 seconds, for at most 90 seconds (`BOT_WAIT_MS`). Each slice returns as soon as the answer is stored.
+5. It waits: it asks the Durable Object `/wait` in slices of up to 30 seconds, for at most 300 seconds (`BOT_WAIT_MS`). Each slice returns as soon as the answer is stored.
 6. The bot POSTs its answer to the callback. `botReply` first checks the HMAC in the id; an id the Worker did not make is refused before any storage is used. Then the Durable Object's `/reply` stores the text only if the token matches and no text is there yet, and wakes the waiting slice.
-7. The Worker reads the text, calls `/done` (the object deletes everything), removes Markdown characters (the characters `*`, `#` and the backtick) and streams the answer to the device. If nothing arrives in 90 seconds the reply ends with `bot_timeout`.
+7. The Worker reads the text, calls `/done` (the object deletes everything), removes Markdown characters (the characters `*`, `#` and the backtick) and streams the answer to the device. If nothing arrives in 300 seconds the reply ends with `bot_timeout`.
 
 When the question fails, the rest of the reply is not an answer: it starts with the control character `\u0001` and a short code (`bot_timeout`, `bot_unreachable`), and the firmware shows an error instead of speaking it.
 
@@ -83,7 +83,7 @@ If the `BOT` binding is missing, the same four steps use a KV key `bot:<id>` ins
 - **One answer per question.** `/reply` needs the matching token and an empty `text`; a second post gets 403.
 - **The token travels in the path**, not in a query string, because some bots HTML-escape `&` and break query strings. The older `?id=&t=` form still works.
 - **Webhook and callback addresses must be `https` on a public host name** (`checkHttpsUrl`), so the bot's credentials cannot be sent to an address inside a network.
-- **Limits:** the question is at most 1000 characters, the answer 4000, and the whole wait 90 seconds.
+- **Limits:** the question is at most 1000 characters, the answer 4000, and the whole wait 300 seconds.
 
 ## Reading the logs
 
