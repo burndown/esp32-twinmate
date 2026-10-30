@@ -319,7 +319,7 @@ async function botInit(env, id, tok) {
   else await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
 }
 // stop: {done: true} ends the wait early (the caller gave up, or the client hung up); a question whose state is gone (expired or never
-// stored) ends it too, instead of asking again and again until the time is up.
+// stored) ends it too when a Durable Object holds it, instead of asking again and again until the time is up.
 async function botWait(env, id, ms, stop = {}) {
   const until = Date.now() + ms;
   while (Date.now() < until && !stop.done) {
@@ -332,7 +332,7 @@ async function botWait(env, id, ms, stop = {}) {
       await new Promise((r) => setTimeout(r, 1500));
       const v = await env.CFG.get("bot:" + id, "json").catch(() => null);
       if (v && v.text) { await env.CFG.delete("bot:" + id); return v.text; }
-      if (!v) return null;
+      // no "gone" exit here: a KV read right after the write can still miss the key for up to a minute
     }
   }
   return null;
