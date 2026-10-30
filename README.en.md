@@ -193,7 +193,7 @@ The device menu calls this answer source **Grok Bot**. Any bot that implements t
 
 1. The gateway sends a `POST` to the configured Webhook URL with `Authorization: Bearer <credentials>` and a JSON body of `{"message": "<recognised text>\n\n(callback instructions…)"}`.
 2. The bot copies the complete callback URL from the message and sends a `POST` to `https://<your-worker>.workers.dev/bot-reply/<id>/<one-time-token>`, with `{"reply": "<answer>"}` and `Content-Type: application/json`. No additional authorisation header is needed. The callback URL can be used once and expires after 10 minutes.
-3. The gateway first makes the device play an acknowledgement, then holds the connection for up to 270 seconds. The device speaks the answer when it arrives, or reports a timeout if the bot does not reply.
+3. The gateway first makes the device play an acknowledgement, then holds the connection for up to 300 seconds. The device speaks the answer when it arrives, or reports a timeout if the bot does not reply.
 4. If the bot restricts outbound requests, add the callback's Worker hostname to its allowlist. Otherwise the callback will be blocked.
 
 How one Grok Bot question uses KV and Durable Objects is explained in the [technical details](docs/GROK-BOT.md).

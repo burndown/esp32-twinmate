@@ -15,19 +15,21 @@
 | `POST /wg/enroll` | 设备 | 设备提交自己的 WireGuard 公钥，得到服务器信息和隧道地址 |
 | `POST /avatar` | 设备 | 下载你放在网关上的圆形图 |
 | `GET /badge/list`、`GET /badge/<n>` | 设备（设置页用管理令牌读取它们） | 设备复制进 badge 分区的 Badge 图片（设置 → Badge → Sync） |
-| `GET /admin?k=…` | 你 | 设置页 |
+| `GET /admin` | 你 | 设置页（静态页面，令牌由页面向你要） |
 | `/admin/api`、`/admin/wg`、`/admin/test`、`/admin/voices`、`GET /wg/peers`、`POST /avatar/set`、`GET /avatar/view`、`POST /avatar/delete`、`POST /badge/set?n=N`、`POST /badge/delete?n=N`、`GET /health` | 你 | 管理接口 |
 
 ## 两个令牌
 
-- **设备令牌** `GATEWAY_TOKEN`：写在固件里，所以谁拿到设备谁就拿到它。只能用于 `/stt` `/tts` `/chat` `/wg/enroll` 和下载头像。
+- **设备令牌** `GATEWAY_TOKEN`：写在固件里，所以谁拿到设备谁就拿到它。只能用于 `/stt` `/tts` `/chat` `/wg/enroll` 和下载头像、徽章图片。
 - **管理令牌** `ADMIN_TOKEN`：只在你的浏览器里，用于设置页和所有管理接口，也可以放在 `Authorization: Bearer …` 头里。设备令牌打不开它们。
 - 没设 `ADMIN_TOKEN` 时，设备令牌仍能打开管理接口（旧部署继续能用），设置页会提示。`tools/muse-cloud.py init` 会生成两个不同的随机令牌。
-- 令牌必须是长随机串（`openssl rand -hex 24`）。网关对错误令牌不做次数限制；想要限制，可以在 Cloudflare 里加速率限制规则（免费版是否可用我没有核实）。令牌在 URL 的 `?k=` 里，会出现在访问日志中。
+- 令牌必须是长随机串（`openssl rand -hex 24`）。网关对错误令牌不做次数限制；想要限制，可以在 Cloudflare 里加速率限制规则（免费版是否可用我没有核实）。**设备**令牌在固件请求的 URL `?k=` 里（Worker 也接受 `Authorization: Bearer`，但固件目前不发），会出现在访问日志中；设置页已不再把管理令牌放进请求地址。
+
+- 设备令牌在每台固件里，持有者可以登记编造的设备编号或 WireGuard 公钥。设备列表（8 台）满时，你没动过的设备（没改名、没隧道密钥、没存过图片或设置、没拉黑）会被新来的顶掉，你处理过的设备不会被顶掉；有 20 个隧道申请在等时，最老的一个满一天后会被丢弃，否则新申请得到 `429`。有耐心的攻击者仍可能占满待批条目，发现编造的就在设置页删掉，并更换设备令牌。
 
 ## 设置页
 
-`https://<你的worker>.workers.dev/admin?k=<管理令牌>`，页面上方有导航（概览、语音、机器人、网络、外观），有设置要保存的页签底部会出现保存栏，每一项都有"测试"按钮：
+`https://<你的worker>.workers.dev/admin`。页面本身是不含任何数据的静态文件，它会向你要管理令牌，把令牌放在浏览器标签页里（`sessionStorage`），并用 `Authorization: Bearer` 头发送，所以令牌不会出现在请求地址里。旧的 `/admin?k=<管理令牌>` 书签仍然可用：页面会立刻把令牌从地址栏拿掉（第一次请求仍会以 `?k=` 记入日志）。页面上方有导航（概览、语音、机器人、网络、外观），有设置要保存的页签底部会出现保存栏，每一项都有"测试"按钮：
 
 - **这个网关**：固件里要填的三个地址，Workers AI、Durable Object、管理令牌三个状态。
 - **语音识别**：Cloudflare Workers AI（Whisper large-v3-turbo，免费、不要密钥）或 Azure Speech，和语言。
@@ -39,6 +41,8 @@
 - **WireGuard**：服务器公钥、地址、端口、隧道网段；下面列出申请过隧道的设备，每个设备一行 `wg set` 命令和“复制命令”按钮，你把它在 WireGuard 服务器上执行就是批准，再点“标记为已批准”；“吊销并释放地址”会释放它的隧道地址。页面里不存任何私钥。
 
 保存是按段合并的，只改你改的那一段。**保存后最多约一分钟生效**：Cloudflare KV 的读取有缓存。页面保存的密钥放在你自己 Cloudflare 账号的 KV 里（明文），页面只显示末四位；更严格的做法是用 `wrangler secret put AZURE_SPEECH_KEY`、`GROKBOT_URL`、`GROKBOT_AUTH`（WireGuard 的服务器信息也可以用 `WG_SERVER_PUB`、`WG_ENDPOINT`、`WG_PORT`、`WG_SUBNET`）。
+
+两点说明。“测试 Grok Bot”按钮最多等 90 秒回调，而真实提问等 300 秒，所以一个较慢的机器人在实际使用中能通过，测试却可能失败。保存的值会被检查（音色名、语言、识别服务，以及 WireGuard 的密钥、主机、端口和地址前缀），不对的返回 `400`。设备自己申请隧道时，网关从 `.10` 起分配；`.2` 到 `.9` 留给把地址写进固件的设备，两者不会冲突。
 
 ## 分设备设置与 WireGuard 管理
 

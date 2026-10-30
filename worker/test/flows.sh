@@ -28,4 +28,8 @@ check    "/stt: under 0.1 s is an empty text"          '{"text":""}' "$(curl -s 
 check    "/tts: no text means 400"                     400 "$(code -X POST "$B/tts?k=devtok" -d '{}')"
 check    "a forged bot callback is refused"            403 "$(code -X POST "$B/bot-reply/0000/0000" -d '{"reply":"x"}')"
 check    "an http Webhook address is refused when saved" 400 "$(code -X POST "$B/admin/api?k=admtok" -d '{"secrets":{"grokbot_url":"http://127.0.0.1:9/hook","grokbot_auth":"x"}}')"
+check    "a voice name with markup is refused when saved"  400 "$(code -X POST "$B/admin/api?k=admtok" -d '{"config":{"tts":{"voice":"x'"'"'><break/>"}}}')"
+check    "a bad tunnel key is refused when saved"      400 "$(code -X POST "$B/admin/api?k=admtok" -d '{"config":{"wg":{"server_pub":"nope"}}}')"
+check    "an unknown recognition provider is refused"  400 "$(code -X POST "$B/admin/api?k=admtok" -d '{"config":{"asr":{"provider":"x"}}}')"
+check    "the first dynamic tunnel address is .10 (2-9 are for addresses in the firmware)" 1 "$(curl -s -X POST "$B/wg/enroll?k=devtok" -d "{\"pub\":\"$(head -c 32 /dev/urandom | base64)\"}" | grep -c '"address":"10.77.0.10"')"
 finish

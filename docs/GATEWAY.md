@@ -15,19 +15,19 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 | `POST /wg/enroll` | device | The device sends its own WireGuard public key and gets the server details and a tunnel address |
 | `POST /avatar` | device | Downloads the round picture you put on the gateway |
 | `GET /badge/list`, `GET /badge/<n>` | device (the settings page reads them with the admin token) | The badge pictures the device copies into its badge partition (Settings > Badge > Sync) |
-| `GET /admin?k=…` | you | The settings page |
+| `GET /admin` | you | The settings page (a static page; it asks for the token) |
 | `/admin/api`, `/admin/wg`, `/admin/test`, `/admin/voices`, `GET /wg/peers`, `POST /avatar/set`, `GET /avatar/view`, `POST /avatar/delete`, `POST /badge/set?n=N`, `POST /badge/delete?n=N`, `GET /health` | you | Management calls |
 
 ## Two tokens
 
-- **Device token** `GATEWAY_TOKEN`: it is written into the firmware, so whoever holds the device holds it. It can only be used for `/stt`, `/tts`, `/chat`, `/wg/enroll` and downloading the picture.
+- **Device token** `GATEWAY_TOKEN`: it is written into the firmware, so whoever holds the device holds it. It can only be used for `/stt`, `/tts`, `/chat`, `/wg/enroll` and downloading the avatar and badge pictures.
 - **Admin token** `ADMIN_TOKEN`: it stays in your browser. It opens the settings page and all management calls, and may also be sent in an `Authorization: Bearer …` header. The device token does not open them.
 - If `ADMIN_TOKEN` is not set, the device token still opens the management calls (so an old deployment keeps working) and the settings page warns you. `tools/muse-cloud.py init` makes two different random tokens.
-- Tokens must be long random strings (`openssl rand -hex 24`). The gateway does not limit how many wrong tokens are tried; you can add a rate-limiting rule in Cloudflare (I have not checked whether the free plan allows it). The token is in the `?k=` part of the URL, so it appears in access logs.
+- Tokens must be long random strings (`openssl rand -hex 24`). The gateway does not limit how many wrong tokens are tried; you can add a rate-limiting rule in Cloudflare (I have not checked whether the free plan allows it). The **device** token is in the `?k=` part of the URL the firmware calls (the Worker also accepts `Authorization: Bearer`, but the firmware does not send it yet), so it appears in access logs. The admin token is no longer sent in URLs by the settings page.
 
 ## The settings page
 
-`https://<your-worker>.workers.dev/admin?k=<admin token>`. The page has tabs (Overview, Voice, Bot, Network, Appearance); the Save bar is shown on the tabs that have settings to save, and every setting has a **Test** button:
+`https://<your-worker>.workers.dev/admin`. The page itself is a static file with no data in it; it asks for the admin token, keeps it in the browser tab (`sessionStorage`) and sends it in an `Authorization: Bearer` header, so the token is never in a request URL. An old `/admin?k=<admin token>` bookmark still works: the page moves the token out of the address bar at once (that first request is still logged with `?k=`). The page has tabs (Overview, Voice, Bot, Network, Appearance); the Save bar is shown on the tabs that have settings to save, and every setting has a **Test** button:
 
 - **This gateway**: the three addresses to put in the firmware, and the state of the Workers AI binding, the Durable Object binding and the admin token.
 - **Speech recognition**: Cloudflare Workers AI (Whisper large-v3-turbo, free, no key) or Azure Speech, and the language.
@@ -39,6 +39,8 @@ The firmware speaks only a few HTTP calls. The gateway turns them into calls to 
 - **WireGuard**: the server's public key, address, port and the tunnel's address prefix. Below that are the devices that asked for a tunnel, each with a `wg set` command and a "copy command" button. Running that command on the WireGuard server approves the device; then press "mark as approved". "Revoke and free the address" releases its tunnel address. The page stores no private key.
 
 Saving merges by section, so only the section you changed is changed. **A saved change takes up to about a minute to take effect**, because Cloudflare KV reads are cached. Keys saved on the page are kept in the KV of your own Cloudflare account (as plain text; the page shows only the last four characters). A stricter way is `wrangler secret put AZURE_SPEECH_KEY`, `GROKBOT_URL`, `GROKBOT_AUTH` (the gateway reads these environment variables too, and the WireGuard server details can be given as `WG_SERVER_PUB`, `WG_ENDPOINT`, `WG_PORT`, `WG_SUBNET`).
+
+Two details. The **Test Grok Bot** button waits at most 90 seconds for the callback, while a real question waits 300 seconds, so a slow bot can pass in real use and still fail the test. Tunnel addresses for devices that enrol themselves are handed out from `.10` up; `.2` to `.9` are left for devices whose address is written into the firmware, so the two never collide. Saved values are checked (voice names, languages, the recognition provider, and the WireGuard key, host, port and address prefix), and a wrong one is refused with `400`.
 
 ## Settings per device and WireGuard management
 
@@ -58,6 +60,7 @@ A lost gadget can be blocked on the Devices tab ("Block", with a confirmation; "
 - The Azure region is accepted only as a name such as `eastasia`, and the bot's Webhook and callback addresses only as `https` on a public host name. So if the settings page is misused, the Azure key and the bot's credentials still cannot be sent elsewhere.
 - WireGuard enrolment lives in a Durable Object (the `WG` binding and the `v2` migration in `wrangler.toml`; `wrangler deploy` creates them): concurrent requests never receive the same address, at most 20 public keys can wait for approval at once, and a key nobody approves within a week is forgotten.
 - Tokens are compared in constant time.
+- Because the device token is in every firmware, anyone who holds one could register made-up gadget ids or WireGuard keys. When the list of 8 gadgets is full, a gadget you have not touched (not renamed, no tunnel key, no picture or settings saved, not blocked) is pushed out by a newcomer; gadgets you worked on are never pushed out. When 20 tunnel requests are waiting, the oldest one is dropped once it is a day old, otherwise new ones get `429`. A patient attacker can still fill the lists with pending entries, so remove made-up ones on the settings page and replace the device token if you see them.
 - The Azure free tier allows only one real-time request at a time. The gateway synthesises up to three pieces in parallel and backs off and retries when it is throttled (`429`).
 - Whisper invents subtitle credits for silence. When a recording is almost silent the gateway returns an empty result, and it filters such credits.
 

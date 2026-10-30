@@ -47,7 +47,7 @@ enabled = false
 endpoint = ""                    # the server's host name or IP
 port = 51820
 server_public_key = ""           # /etc/wireguard/server.pub on the server
-address = "10.77.0.2"            # this device's address inside the tunnel; one per device
+address = "10.77.0.2"            # this device's address inside the tunnel; one per device. Use 10.77.0.2 to .9 here: the gateway hands out .10 and up to devices that enrol themselves
 subnet = "10.77.0."              # the tunnel's address prefix (for the Worker's registry)
 # off | auto | always. Auto: the tunnel only when Muse or the gateway cannot be reached; never on the home network.
 mode = "auto"

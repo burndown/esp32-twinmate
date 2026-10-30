@@ -7,7 +7,7 @@
 //   POST /avatar, /avatar/set               the picture for the round screen
 //   GET /badge/list, /badge/<n>             the badge pictures the device copies into its badge partition (device token)
 //   POST /badge/set?n=N, /badge/delete?n=N  put or remove one (admin token); the admin page does it from the browser
-//   GET  /admin?k=...                       the settings page
+//   GET  /admin                             the settings page (static; the page sends the admin token in a header)
 // Two tokens: GATEWAY_TOKEN (devices) and ADMIN_TOKEN (the settings page, /wg/peers, /avatar/set, /health).
 // Limits: /stt 2 MB, /tts 600 characters, /chat 1000 characters, avatar 120 KB (413 beyond that).
 // Settings live in KV (key "config"), keys in KV (key "secrets"); Worker secrets with the upper-case names also work.
@@ -59,6 +59,9 @@ const MAX_CHAT_CHARS = 1000;
 const MAX_AVATAR = 120 * 1024;       // 233x233 RGB565 is 108 KB
 const MAX_BADGES = 9;                // the badge partition holds 4 MB in slots of 0x70000 bytes
 const MAX_BADGE = 0x70000;           // 466 x 466 RGB565 plus the 16-byte header fits one slot
+// Tunnel addresses 2..9 are left for devices whose address is written into the firmware (muse-cloud.toml [wireguard] address,
+// tools/make-wg-config.py), which the registry does not know about; the registry hands out 10 and up.
+const FIRST_DYNAMIC = 10;
 const MAX_PENDING_PEERS = 20;        // device keys that asked for a tunnel and nobody has approved yet
 const tooLarge = () => json({ error: "too large" }, 413);
 // A /chat reply is plain text that gets spoken. When the bot fails, the rest of the reply is not an answer: it starts with this
@@ -71,6 +74,24 @@ const ERR = "\u0001";
 // token still opens them (an old deployment keeps working) and the settings page says so.
 const isAdminPath = (p) => p.startsWith("/admin") || p === "/wg/peers" || p === "/avatar/set" || p === "/avatar/view" || p === "/avatar/delete" || p === "/health" || p === "/badge/set" || p === "/badge/delete";
 const givenToken = (req, url) => url.searchParams.get("k") || (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+
+// The values the settings page and the per-device overrides may store. Empty means "not set" (the default or the environment applies).
+const VOICE_RE = /^[A-Za-z0-9:-]{3,80}$/;
+const LANG_RE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?)$/;
+const B64KEY_RE = /^[A-Za-z0-9+/]{43}=$/;
+const HOST_RE = /^[A-Za-z0-9.:-]{1,253}$/;
+const SUBNET_RE = /^(\d{1,3}\.){3}$/;
+function checkSetting(sect, f, v) {
+  if (v === "" || v == null) return;
+  const bad = () => { throw new Error("bad value for " + sect + "." + f); };
+  if (sect === "asr" && f === "provider" && !["cloudflare", "azure"].includes(v)) bad();
+  if (sect === "asr" && f === "language" && !(typeof v === "string" && LANG_RE.test(v))) bad();
+  if (sect === "tts" && f === "voice" && !(typeof v === "string" && VOICE_RE.test(v))) bad();
+  if (sect === "wg" && f === "server_pub" && !(typeof v === "string" && B64KEY_RE.test(v))) bad();
+  if (sect === "wg" && f === "endpoint" && !(typeof v === "string" && HOST_RE.test(v))) bad();
+  if (sect === "wg" && f === "subnet" && !(typeof v === "string" && SUBNET_RE.test(v) && v.split(".").slice(0, 3).every((x) => +x <= 255))) bad();
+  if (sect === "wg" && f === "port" && !(Number.isInteger(+v) && +v >= 1 && +v <= 65535)) bad();
+}
 
 // Azure Speech host for a region name ("eastasia"), or a full "<region>.tts.speech.microsoft.com" / ".azure.cn" host; nothing else,
 // because the Azure key travels with the request.
@@ -193,6 +214,7 @@ const xmlEsc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/
 async function synthAzure(cfg, S, t, fmt = "audio-16khz-128kbitrate-mono-mp3") {
   if (!S.azure_key) throw new Error("Azure Speech key not set");
   const T = cfg.tts, voice = T.voice || "zh-CN-XiaoxiaoMultilingualNeural";
+  if (!VOICE_RE.test(voice)) throw new Error("bad voice name");   // it goes into the SSML below
   const host = azureHost(T.region, "tts");
   const lang = voice.split("-").slice(0, 2).join("-");
   const r = await fetch(`https://${host}/cognitiveservices/v1`, {
@@ -245,7 +267,7 @@ async function tts(req, env, all) {
 // ---- Grok Bot (a Webhook bot) ----------------------------------------------------------------------------
 // A cloud agent that takes a webhook and answers later (30 s to a few minutes). The device speaks an acknowledgement at once,
 // the gateway keeps the response open, the bot POSTs its answer to /bot-reply with a one-time token, and the answer is streamed on.
-const BOT_WAIT_MS = 300000;   // 5 minutes; the firmware gives the HTTP read 330 s
+const BOT_WAIT_MS = 300000;   // 5 minutes; the firmware gives the HTTP read 330 s (timeout_ms in firmware/muse-cloud.patch), so the bot_timeout marker below arrives first
 function hex(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
 
 // The callback host's real address from a public resolver: some bots sit behind a DNS that answers with a fake 198.18.x.x.
@@ -280,7 +302,7 @@ export class BotWait {
       return new Response("ok");
     }
     if (path === "/wait") {
-      if (!v) return Response.json({ text: null });
+      if (!v) return Response.json({ text: null, gone: true });
       if (!v.text) await new Promise((res) => { this.waiters.push(res); setTimeout(res, Math.min(+b.ms || 30000, 60000)); });
       const w = (await this.state.storage.get("v")) || {};
       return Response.json({ text: w.text || null });
@@ -296,17 +318,21 @@ async function botInit(env, id, tok) {
   if (env.BOT) await doCall(env, id, "init", { tok });
   else await env.CFG.put("bot:" + id, JSON.stringify({ tok, text: null }), { expirationTtl: 600 });
 }
-async function botWait(env, id, ms) {
+// stop: {done: true} ends the wait early (the caller gave up, or the client hung up); a question whose state is gone (expired or never
+// stored) ends it too when a Durable Object holds it, instead of asking again and again until the time is up.
+async function botWait(env, id, ms, stop = {}) {
   const until = Date.now() + ms;
-  while (Date.now() < until) {
+  while (Date.now() < until && !stop.done) {
     if (env.BOT) {
       const r = await doCall(env, id, "wait", { ms: Math.min(until - Date.now(), 30000) });
-      const t = (await r.json().catch(() => ({}))).text;
-      if (t) { await doCall(env, id, "done"); return t; }
+      const j = await r.json().catch(() => ({}));
+      if (j.text) { await doCall(env, id, "done"); return j.text; }
+      if (j.gone) return null;
     } else {
       await new Promise((r) => setTimeout(r, 1500));
       const v = await env.CFG.get("bot:" + id, "json").catch(() => null);
       if (v && v.text) { await env.CFG.delete("bot:" + id); return v.text; }
+      // no "gone" exit here: a KV read right after the write can still miss the key for up to a minute
     }
   }
   return null;
@@ -336,7 +362,7 @@ async function botAsk(req, env, all, ask) {
   const r = await fetch(hook, { method: "POST", headers: { Authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ message }), signal: AbortSignal.timeout(20000) });
   console.log("bot webhook", r.status);
   if (!r.ok) throw new Error("the bot answered HTTP " + r.status);
-  return () => botWait(env, id, BOT_WAIT_MS);
+  return (stop) => botWait(env, id, BOT_WAIT_MS, stop);
 }
 
 // /chat: with "away" the question goes to the bot; anything else is for Muse itself (the firmware asks Muse when this says so).
@@ -348,17 +374,19 @@ async function chat(req, env, all) {
   const mode = all.cfg.bot.mode;
   if (mode === "off" || !(away || mode === "always")) return json({ muse: true }, 503);
   const enc = new TextEncoder();
+  const stop = { done: false };   // set when the device hangs up: the wait for the bot ends with it
   return new Response(new ReadableStream({
     async start(ctl) {
-      const say = (t) => ctl.enqueue(enc.encode(t));
+      const say = (t) => { if (stop.done) return; try { ctl.enqueue(enc.encode(t)); } catch (e) { stop.done = true; } };
       say("收到，我去问小黑，请稍等。");   // heard at once, before the Webhook
       try {
         const wait = await botAsk(req, env, all, userText);
-        const answer = await wait();
+        const answer = await wait(stop);
         say(answer ? "\n" + answer.replace(/[*#`]+/g, "") : ERR + "bot_timeout");
       } catch (e) { console.log("bot", String(e).slice(0, 150)); say(ERR + "bot_unreachable"); }
-      ctl.close();
+      try { ctl.close(); } catch (e) { /* already closed */ }
     },
+    cancel() { stop.done = true; },
   }), { headers: { "content-type": "text/plain; charset=utf-8" } });
 }
 
@@ -392,9 +420,16 @@ export class WgRegistry {
     if (path === "/enroll") {
       let p = peers[b.pub];
       if (!p) {
-        if (Object.values(peers).filter((x) => !x.ok).length >= MAX_PENDING_PEERS) return Response.json({ error: "too many waiting" }, { status: 429 });
+        const waiting = Object.entries(peers).filter(([, x]) => !x.ok);
+        if (waiting.length >= MAX_PENDING_PEERS) {
+          // The oldest unapproved request makes room once it is a day old; a flood of fresh ones still gets 429 and cannot push out
+          // approved keys, and the owner can revoke the made-up ones on the settings page.
+          const [oldKey, old] = waiting.sort((a, c) => Date.parse(a[1].at) - Date.parse(c[1].at))[0];
+          if (Date.now() - Date.parse(old.at) < 86400000) return Response.json({ error: "too many waiting" }, { status: 429 });
+          delete peers[oldKey];
+        }
         const used = new Set(Object.values(peers).map((x) => x.n));
-        let n = 2;
+        let n = FIRST_DYNAMIC;
         while (used.has(n) && n <= 250) n++;
         if (n > 250) return Response.json({ error: "no addresses left" }, { status: 507 });
         p = peers[b.pub] = { n, at: new Date().toISOString(), ok: false };
@@ -477,13 +512,26 @@ async function devicesGet(env) {
   const v = env.CFG ? await env.CFG.get("devices", "json").catch(() => null) : null;
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
+// A gadget the owner has not touched (never renamed, no tunnel key, not blocked, no picture or settings saved from the settings page)
+// may be pushed out of a full list by a newcomer: the device token is in every firmware, so anyone holding one could otherwise fill
+// the list with made-up ids and keep real gadgets out. Gadgets the owner worked on ("kept") are never pushed out.
+const isKept = (d, e) => !!(e.kept || e.blocked || e.wg_pub || (e.name && e.name !== "Device " + d.slice(-6)));
+async function markKept(env, d) {
+  if (!d || !env.CFG) return;
+  const devs = await devicesGet(env);
+  if (devs[d] && !devs[d].kept) { devs[d].kept = true; await env.CFG.put("devices", JSON.stringify(devs)); }
+}
 async function deviceSeen(env, d) {
   if (!d || !env.CFG) return;
   const devs = await devicesGet(env);
   const now = Math.floor(Date.now() / 1000);
   const e = devs[d];
   if (!e) {
-    if (Object.keys(devs).length >= MAX_DEVICES) return;
+    if (Object.keys(devs).length >= MAX_DEVICES) {
+      const idle = Object.entries(devs).filter(([k, x]) => !isKept(k, x)).sort((a, b) => (a[1].last_seen || 0) - (b[1].last_seen || 0))[0];
+      if (!idle) return;
+      delete devs[idle[0]];
+    }
     devs[d] = { name: "Device " + d.slice(-6), first_seen: now, last_seen: now };
   } else if (now - (e.last_seen || 0) < SEEN_EVERY) {
     return;
@@ -517,6 +565,7 @@ async function avatarSet(req, env, url) {
   const w = v.getUint16(4, true), h = v.getUint16(6, true), n = v.getUint32(8, true);
   if (w > 240 || h > 240 || n !== w * h * 2 || b.byteLength !== 16 + n) return json({ error: "bad size" }, 400);
   await env.CFG.put(kAvatar(d), b);
+  await markKept(env, d);
   return json({ ok: true, w, h, bytes: n });
 }
 // The settings page shows and removes the picture (admin token); the device asks with POST /avatar (device token).
@@ -571,6 +620,7 @@ async function badgeSet(req, env, url) {
   items.push({ n, v: ver, w, h, bytes });
   items.sort((a, c) => a.n - c.n);
   await env.CFG.put(kBadges(d), JSON.stringify(items));
+  await markKept(env, d);
   return json({ ok: true, n, v: ver, w, h, bytes });
 }
 async function badgeDelete(req, env, url) {
@@ -637,6 +687,7 @@ async function adminMigrate(env, url) {
     await env.CFG.put(kBadges(d), JSON.stringify(old));
     badges = old.length;
   }
+  if (avatar || badges) await markKept(env, d);
   return json({ ok: true, avatar, badges });
 }
 
@@ -648,7 +699,6 @@ async function admin(req, env, url, all) {
   if (p === "/admin/devices" && req.method === "GET") return await adminDevices(env);
   if (p === "/admin/device" && req.method === "POST") return await adminDevice(req, env);
   if (p === "/admin/migrate" && req.method === "POST") return await adminMigrate(env, url);
-  if (p === "/admin" && req.method === "GET") return text(adminHtml, 200, "text/html; charset=utf-8");
   // ?d=<gadget id>: the settings of one gadget. "config" is what applies to it (its own overrides over the global values),
   // "global" the global values, "over" the parts it overrides. Without d it is the global settings.
   if (p === "/admin/api" && req.method === "GET") {
@@ -672,8 +722,9 @@ async function admin(req, env, url, all) {
         for (const f of DEV_FIELDS[sect]) if (["string", "number"].includes(typeof c[sect][f])) ov[sect][f] = c[sect][f];
       }
       try { if (ov.tts && ov.tts.region) azureHost(ov.tts.region, "tts"); } catch (e) { return json({ error: "区域名不对：只能是 eastasia 这样的名字" }, 400); }
+      try { for (const [sect, o] of Object.entries(ov)) for (const [f, v] of Object.entries(o)) checkSetting(sect, f, v); } catch (e) { return json({ error: "设置值格式不对：" + String(e.message) }, 400); }
       if (ov.bot && !["auto", "always", "off"].includes(ov.bot.mode)) ov.bot.mode = "auto";
-      if (Object.keys(ov).length) await env.CFG.put("devcfg:" + d, JSON.stringify(ov)); else await env.CFG.delete("devcfg:" + d);
+      if (Object.keys(ov).length) { await env.CFG.put("devcfg:" + d, JSON.stringify(ov)); await markKept(env, d); } else await env.CFG.delete("devcfg:" + d);
     } else if (body.config) {   // merged into what is stored, section by section: a partial update never wipes the rest
       const keep = { ...all.over };
       for (const sect of Object.keys(DEFAULTS)) {
@@ -682,9 +733,10 @@ async function admin(req, env, url, all) {
         keep[sect] = { ...(keep[sect] || {}) };
         for (const [f, v] of Object.entries(c)) if (f in DEFAULTS[sect] && ["string", "number"].includes(typeof v)) keep[sect][f] = v;
         try {
+          for (const [f, v] of Object.entries(keep[sect])) checkSetting(sect, f, v);
           if (sect === "tts" && keep.tts.region) azureHost(keep.tts.region, "tts");
           if (sect === "bot" && keep.bot.callback_base) checkHttpsUrl(keep.bot.callback_base);
-        } catch (e) { return json({ error: (sect === "tts" ? "区域名不对：只能是 eastasia 这样的名字" : "回调地址只接受公网域名上的 https 地址") }, 400); }
+        } catch (e) { return json({ error: /^bad value/.test(String(e.message)) ? "设置值格式不对：" + e.message : (sect === "tts" ? "区域名不对：只能是 eastasia 这样的名字" : "回调地址只接受公网域名上的 https 地址") }, 400); }
       }
       if (keep.bot && keep.bot.mode && !["auto", "always", "off"].includes(keep.bot.mode)) keep.bot.mode = "auto";
       await env.CFG.put("config", JSON.stringify(keep));
@@ -783,12 +835,18 @@ async function admin(req, env, url, all) {
   }
   return text("not found", 404);
 }
-const wait2 = (wait, ms) => Promise.race([wait(), new Promise((r) => setTimeout(() => r(null), ms))]);
+const wait2 = (wait, ms) => {
+  const stop = { done: false }, timer = new Promise((r) => setTimeout(() => r(null), ms));
+  return Promise.race([wait(stop), timer]).finally(() => { stop.done = true; });   // the wait in the background ends with the race
+};
 
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the bot calls this: a one-time token, not the gateway token
+    // The settings page itself is a static file with no data in it; the token is asked for by the page and sent in a header, so it
+    // never has to be in a URL (an old ?k= bookmark still works: the page moves it to sessionStorage and clears the address bar).
+    if (url.pathname === "/admin" && req.method === "GET") return new Response(adminHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" } });
     const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
     let allowed = !!want && (await safeEq(givenToken(req, url), want));
     const asDevice = allowed && !isAdminPath(url.pathname);   // a gadget's own call (not the settings page's)
