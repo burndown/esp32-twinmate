@@ -187,8 +187,11 @@ def cmd_check(a):
 
 # ---------- the gateway ----------
 
+WRANGLER = "wrangler@4.149.0"   # the version worker/test/lib.sh tests with; a newer one may change its output (the KV id is read from it)
+
+
 def wrangler(args, cwd, input=None, check=True, quiet=False):
-    return run(["npx", "--yes", "wrangler"] + args, cwd=cwd, input=input, check=check, quiet=quiet)
+    return run(["npx", "--yes", WRANGLER] + args, cwd=cwd, input=input, check=check, quiet=quiet)
 
 
 def http(method, url, body=None, tries=4):
@@ -240,7 +243,7 @@ def cmd_gateway(a):
                      "Account Settings Read), its Client IP Address Filtering (error 9109 means this machine's address is not allowed), "
                      "and CLOUDFLARE_ACCOUNT_ID.\n" + (who.stdout + who.stderr).strip()[-400:])
         print("logging in to Cloudflare ...")
-        subprocess.run(["npx", "--yes", "wrangler", "login"], cwd=worker, check=True)
+        subprocess.run(["npx", "--yes", WRANGLER, "login"], cwd=worker, check=True)
     kv_id = g.get("kv_id", "")
     if not kv_id:
         r = wrangler(["kv", "namespace", "create", g["name"] + "-cfg"], worker, quiet=True)
