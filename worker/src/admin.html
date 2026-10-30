@@ -218,7 +218,14 @@ try {
   else K = sessionStorage.getItem("admtok") || "";
 } catch (e) {}
 if (!K) { K = prompt("管理令牌 ADMIN_TOKEN") || ""; try { if (K) sessionStorage.setItem("admtok", K); } catch (e) {} }
-const af = (url, opt = {}) => fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + K } });
+// A refused token (403 "forbidden", not a JSON answer): forget it and ask again, instead of leaving a half-loaded page.
+const af = (url, opt = {}) => fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + K } }).then((r) => {
+  if (r.status === 403 && !(r.headers.get("content-type") || "").includes("json")) {
+    try { sessionStorage.removeItem("admtok"); } catch (e) {}
+    alert("管理令牌不对，请重新输入"); location.reload(); return new Promise(() => {});
+  }
+  return r;
+});
 const api = (path, opt) => af(path, opt).then((r) => r.json());
 const SECRETS = ["azure_key", "grokbot_url", "grokbot_auth"];
 let ORIGIN = location.origin;
