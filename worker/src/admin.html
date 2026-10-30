@@ -210,8 +210,16 @@ pre.cfg{background:var(--bg);border:1px dashed var(--line);border-radius:8px;pad
 
 <script>
 const $ = (id) => document.getElementById(id);
-const K = new URLSearchParams(location.search).get("k") || "";
-const api = (path, opt) => fetch(path + (path.includes("?") ? "&" : "?") + "k=" + encodeURIComponent(K), opt).then((r) => r.json());
+// The admin token travels in an Authorization header, never in a request URL (URLs end up in logs and the browser history).
+// A bookmark with ?k=… still works: the token is moved to sessionStorage and removed from the address bar.
+let K = new URLSearchParams(location.search).get("k") || "";
+try {
+  if (K) { sessionStorage.setItem("admtok", K); history.replaceState(null, "", location.pathname + location.hash); }
+  else K = sessionStorage.getItem("admtok") || "";
+} catch (e) {}
+if (!K) { K = prompt("管理令牌 ADMIN_TOKEN") || ""; try { if (K) sessionStorage.setItem("admtok", K); } catch (e) {} }
+const af = (url, opt = {}) => fetch(url, { ...opt, headers: { ...(opt.headers || {}), Authorization: "Bearer " + K } });
+const api = (path, opt) => af(path, opt).then((r) => r.json());
 const SECRETS = ["azure_key", "grokbot_url", "grokbot_auth"];
 let ORIGIN = location.origin;
 
@@ -226,7 +234,6 @@ const SEC_NAME = { asr: "识别", tts: "合成", bot: "Grok Bot" };
 let SCOPE = "";
 try { SCOPE = localStorage.getItem("scope") || ""; } catch (e) {}
 let DEV = SCOPE, DEVS = [], LEGACY = {}, WG = null, state = null;
-const kq = () => "k=" + encodeURIComponent(K);
 const devQ = () => (DEV ? "&d=" + encodeURIComponent(DEV) : "");
 const BADGE_MAX = 9, BADGE_SIZE = 466, AV = 233;
 const ago = (t) => { if (!t) return "还没来过"; const s = Math.max(0, Math.floor(Date.now() / 1000 - t)); return s < 90 ? "刚刚" : s < 5400 ? Math.round(s / 60) + " 分钟前" : s < 172800 ? Math.round(s / 3600) + " 小时前" : Math.round(s / 86400) + " 天前"; };
@@ -288,7 +295,7 @@ function fill(d) {
 }
 async function test(service) {
   const box = $("res_" + service); box.style.display = "block"; box.textContent = "测试中…";
-  const r = await fetch("/admin/test?k=" + encodeURIComponent(K), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service, config: config() }) });
+  const r = await af("/admin/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ service, config: config() }) });
   if ((r.headers.get("content-type") || "").includes("audio")) {
     const blob = await r.blob(); const url = URL.createObjectURL(blob);
     box.innerHTML = "合成用时 " + r.headers.get("x-ms") + " 毫秒，" + r.headers.get("x-parts") + " 段。<br><audio controls src='" + url + "'></audio>";
@@ -577,7 +584,7 @@ async function loadBadges() {
     const t = document.createElement("div"); t.className = "hint"; t.textContent = "第 " + (it.n + 1) + " 张 · " + new Date(it.v * 1000).toLocaleString();
     const del = document.createElement("button"); del.textContent = "删除"; del.onclick = () => badgeDelete(it.n);
     box.appendChild(t); box.appendChild(del); $("badges").appendChild(box);
-    fetch("/badge/" + it.n + "?" + kq() + devQ()).then((r) => r.arrayBuffer()).then((b) => rgb565ToCanvas(b, cv)).catch(() => {});
+    af("/badge/" + it.n + "?" + devQ()).then((r) => r.arrayBuffer()).then((b) => rgb565ToCanvas(b, cv)).catch(() => {});
   }
 }
 async function badgeUpload() {
@@ -591,7 +598,7 @@ async function badgeUpload() {
     $("badge_msg").textContent = "上传 " + ed.name + " …";
     try {
       const buf = toSlotBytes(renderCrop(ed, BADGE_SIZE), 0x3147424d);
-      const j = await (await fetch("/badge/set?n=" + n + "&" + kq() + devQ(), { method: "POST", body: buf })).json();
+      const j = await (await af("/badge/set?n=" + n + devQ(), { method: "POST", body: buf })).json();
       if (!j.ok) throw new Error(j.error || "失败");
       used.add(n); done++;
     } catch (e) { $("badge_msg").textContent = ed.name + "：" + e.message; break; }
@@ -602,12 +609,12 @@ async function badgeUpload() {
 }
 async function badgeDelete(n) {
   if (!confirm("删除第 " + (n + 1) + " 张？设备下次同步后会去掉它。")) return;
-  await fetch("/badge/delete?n=" + n + "&" + kq() + devQ(), { method: "POST" });
+  await af("/badge/delete?n=" + n + devQ(), { method: "POST" });
   loadDevices(); loadBadges();
 }
 async function avatarShow() {
   const cv = $("av_cv"), st = $("av_state"), g = cv.getContext("2d"); g.clearRect(0, 0, AV, AV); g.fillStyle = "#000"; g.fillRect(0, 0, AV, AV);
-  const r = await fetch("/avatar/view?" + kq() + devQ());
+  const r = await af("/avatar/view?" + devQ());
   if (!r.ok) { st.textContent = "还没有头像"; return; }
   const b = await r.arrayBuffer(); rgb565ToCanvas(b, cv);
   st.textContent = "当前头像 " + new DataView(b).getUint16(4, true) + "×" + new DataView(b).getUint16(6, true) + "，" + Math.round(b.byteLength / 1024) + " KB";
@@ -618,7 +625,7 @@ async function avatarUpload() {
   m.textContent = "上传中…";
   try {
     const buf = toSlotBytes(renderCrop(ed, AV), 0x3156414d);
-    const j = await (await fetch("/avatar/set?" + kq() + devQ(), { method: "POST", body: buf })).json();
+    const j = await (await af("/avatar/set?" + devQ(), { method: "POST", body: buf })).json();
     if (!j.ok) throw new Error(j.error || "失败");
     m.textContent = "已上传。在设备上选“设置 → Avatar → Get picture”。";
     $("av_file").value = ""; $("av_prev").innerHTML = ""; EDIT.av = []; loadDevices(); avatarShow();
@@ -626,7 +633,7 @@ async function avatarUpload() {
 }
 async function avatarDelete() {
   if (!confirm("删除头像图片？设备上已取回的那张不受影响，直到下次取回。")) return;
-  await fetch("/avatar/delete?" + kq() + devQ(), { method: "POST" });
+  await af("/avatar/delete?" + devQ(), { method: "POST" });
   loadDevices(); avatarShow();
 }
 async function init() { await loadDevices(); await load(); loadWg(); loadBadges(); avatarShow(); }

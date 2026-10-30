@@ -7,7 +7,7 @@
 //   POST /avatar, /avatar/set               the picture for the round screen
 //   GET /badge/list, /badge/<n>             the badge pictures the device copies into its badge partition (device token)
 //   POST /badge/set?n=N, /badge/delete?n=N  put or remove one (admin token); the admin page does it from the browser
-//   GET  /admin?k=...                       the settings page
+//   GET  /admin                             the settings page (static; the page sends the admin token in a header)
 // Two tokens: GATEWAY_TOKEN (devices) and ADMIN_TOKEN (the settings page, /wg/peers, /avatar/set, /health).
 // Limits: /stt 2 MB, /tts 600 characters, /chat 1000 characters, avatar 120 KB (413 beyond that).
 // Settings live in KV (key "config"), keys in KV (key "secrets"); Worker secrets with the upper-case names also work.
@@ -245,7 +245,7 @@ async function tts(req, env, all) {
 // ---- Grok Bot (a Webhook bot) ----------------------------------------------------------------------------
 // A cloud agent that takes a webhook and answers later (30 s to a few minutes). The device speaks an acknowledgement at once,
 // the gateway keeps the response open, the bot POSTs its answer to /bot-reply with a one-time token, and the answer is streamed on.
-const BOT_WAIT_MS = 300000;   // 5 minutes; the firmware gives the HTTP read 330 s
+const BOT_WAIT_MS = 300000;   // 5 minutes; the firmware gives the HTTP read 330 s (timeout_ms in firmware/muse-cloud.patch), so the bot_timeout marker below arrives first
 function hex(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join(""); }
 
 // The callback host's real address from a public resolver: some bots sit behind a DNS that answers with a fake 198.18.x.x.
@@ -392,7 +392,14 @@ export class WgRegistry {
     if (path === "/enroll") {
       let p = peers[b.pub];
       if (!p) {
-        if (Object.values(peers).filter((x) => !x.ok).length >= MAX_PENDING_PEERS) return Response.json({ error: "too many waiting" }, { status: 429 });
+        const waiting = Object.entries(peers).filter(([, x]) => !x.ok);
+        if (waiting.length >= MAX_PENDING_PEERS) {
+          // The oldest unapproved request makes room once it is a day old; a flood of fresh ones still gets 429 and cannot push out
+          // approved keys, and the owner can revoke the made-up ones on the settings page.
+          const [oldKey, old] = waiting.sort((a, c) => Date.parse(a[1].at) - Date.parse(c[1].at))[0];
+          if (Date.now() - Date.parse(old.at) < 86400000) return Response.json({ error: "too many waiting" }, { status: 429 });
+          delete peers[oldKey];
+        }
         const used = new Set(Object.values(peers).map((x) => x.n));
         let n = 2;
         while (used.has(n) && n <= 250) n++;
@@ -477,13 +484,26 @@ async function devicesGet(env) {
   const v = env.CFG ? await env.CFG.get("devices", "json").catch(() => null) : null;
   return v && typeof v === "object" && !Array.isArray(v) ? v : {};
 }
+// A gadget the owner has not touched (never renamed, no tunnel key, not blocked, no picture or settings saved from the settings page)
+// may be pushed out of a full list by a newcomer: the device token is in every firmware, so anyone holding one could otherwise fill
+// the list with made-up ids and keep real gadgets out. Gadgets the owner worked on ("kept") are never pushed out.
+const isKept = (d, e) => !!(e.kept || e.blocked || e.wg_pub || (e.name && e.name !== "Device " + d.slice(-6)));
+async function markKept(env, d) {
+  if (!d || !env.CFG) return;
+  const devs = await devicesGet(env);
+  if (devs[d] && !devs[d].kept) { devs[d].kept = true; await env.CFG.put("devices", JSON.stringify(devs)); }
+}
 async function deviceSeen(env, d) {
   if (!d || !env.CFG) return;
   const devs = await devicesGet(env);
   const now = Math.floor(Date.now() / 1000);
   const e = devs[d];
   if (!e) {
-    if (Object.keys(devs).length >= MAX_DEVICES) return;
+    if (Object.keys(devs).length >= MAX_DEVICES) {
+      const idle = Object.entries(devs).filter(([k, x]) => !isKept(k, x)).sort((a, b) => (a[1].last_seen || 0) - (b[1].last_seen || 0))[0];
+      if (!idle) return;
+      delete devs[idle[0]];
+    }
     devs[d] = { name: "Device " + d.slice(-6), first_seen: now, last_seen: now };
   } else if (now - (e.last_seen || 0) < SEEN_EVERY) {
     return;
@@ -517,6 +537,7 @@ async function avatarSet(req, env, url) {
   const w = v.getUint16(4, true), h = v.getUint16(6, true), n = v.getUint32(8, true);
   if (w > 240 || h > 240 || n !== w * h * 2 || b.byteLength !== 16 + n) return json({ error: "bad size" }, 400);
   await env.CFG.put(kAvatar(d), b);
+  await markKept(env, d);
   return json({ ok: true, w, h, bytes: n });
 }
 // The settings page shows and removes the picture (admin token); the device asks with POST /avatar (device token).
@@ -571,6 +592,7 @@ async function badgeSet(req, env, url) {
   items.push({ n, v: ver, w, h, bytes });
   items.sort((a, c) => a.n - c.n);
   await env.CFG.put(kBadges(d), JSON.stringify(items));
+  await markKept(env, d);
   return json({ ok: true, n, v: ver, w, h, bytes });
 }
 async function badgeDelete(req, env, url) {
@@ -637,6 +659,7 @@ async function adminMigrate(env, url) {
     await env.CFG.put(kBadges(d), JSON.stringify(old));
     badges = old.length;
   }
+  if (avatar || badges) await markKept(env, d);
   return json({ ok: true, avatar, badges });
 }
 
@@ -648,7 +671,6 @@ async function admin(req, env, url, all) {
   if (p === "/admin/devices" && req.method === "GET") return await adminDevices(env);
   if (p === "/admin/device" && req.method === "POST") return await adminDevice(req, env);
   if (p === "/admin/migrate" && req.method === "POST") return await adminMigrate(env, url);
-  if (p === "/admin" && req.method === "GET") return text(adminHtml, 200, "text/html; charset=utf-8");
   // ?d=<gadget id>: the settings of one gadget. "config" is what applies to it (its own overrides over the global values),
   // "global" the global values, "over" the parts it overrides. Without d it is the global settings.
   if (p === "/admin/api" && req.method === "GET") {
@@ -673,7 +695,7 @@ async function admin(req, env, url, all) {
       }
       try { if (ov.tts && ov.tts.region) azureHost(ov.tts.region, "tts"); } catch (e) { return json({ error: "区域名不对：只能是 eastasia 这样的名字" }, 400); }
       if (ov.bot && !["auto", "always", "off"].includes(ov.bot.mode)) ov.bot.mode = "auto";
-      if (Object.keys(ov).length) await env.CFG.put("devcfg:" + d, JSON.stringify(ov)); else await env.CFG.delete("devcfg:" + d);
+      if (Object.keys(ov).length) { await env.CFG.put("devcfg:" + d, JSON.stringify(ov)); await markKept(env, d); } else await env.CFG.delete("devcfg:" + d);
     } else if (body.config) {   // merged into what is stored, section by section: a partial update never wipes the rest
       const keep = { ...all.over };
       for (const sect of Object.keys(DEFAULTS)) {
@@ -789,6 +811,9 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (url.pathname.replace(/\/+$/, "").startsWith("/bot-reply")) return await botReply(req, env, url);   // the bot calls this: a one-time token, not the gateway token
+    // The settings page itself is a static file with no data in it; the token is asked for by the page and sent in a header, so it
+    // never has to be in a URL (an old ?k= bookmark still works: the page moves it to sessionStorage and clears the address bar).
+    if (url.pathname === "/admin" && req.method === "GET") return new Response(adminHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" } });
     const want = isAdminPath(url.pathname) ? (env.ADMIN_TOKEN || env.GATEWAY_TOKEN) : env.GATEWAY_TOKEN;
     let allowed = !!want && (await safeEq(givenToken(req, url), want));
     const asDevice = allowed && !isAdminPath(url.pathname);   // a gadget's own call (not the settings page's)

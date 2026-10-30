@@ -15,19 +15,21 @@
 | `POST /wg/enroll` | 设备 | 设备提交自己的 WireGuard 公钥，得到服务器信息和隧道地址 |
 | `POST /avatar` | 设备 | 下载你放在网关上的圆形图 |
 | `GET /badge/list`、`GET /badge/<n>` | 设备（设置页用管理令牌读取它们） | 设备复制进 badge 分区的 Badge 图片（设置 → Badge → Sync） |
-| `GET /admin?k=…` | 你 | 设置页 |
+| `GET /admin` | 你 | 设置页（静态页面，令牌由页面向你要） |
 | `/admin/api`、`/admin/wg`、`/admin/test`、`/admin/voices`、`GET /wg/peers`、`POST /avatar/set`、`GET /avatar/view`、`POST /avatar/delete`、`POST /badge/set?n=N`、`POST /badge/delete?n=N`、`GET /health` | 你 | 管理接口 |
 
 ## 两个令牌
 
-- **设备令牌** `GATEWAY_TOKEN`：写在固件里，所以谁拿到设备谁就拿到它。只能用于 `/stt` `/tts` `/chat` `/wg/enroll` 和下载头像。
+- **设备令牌** `GATEWAY_TOKEN`：写在固件里，所以谁拿到设备谁就拿到它。只能用于 `/stt` `/tts` `/chat` `/wg/enroll` 和下载头像、徽章图片。
 - **管理令牌** `ADMIN_TOKEN`：只在你的浏览器里，用于设置页和所有管理接口，也可以放在 `Authorization: Bearer …` 头里。设备令牌打不开它们。
 - 没设 `ADMIN_TOKEN` 时，设备令牌仍能打开管理接口（旧部署继续能用），设置页会提示。`tools/muse-cloud.py init` 会生成两个不同的随机令牌。
-- 令牌必须是长随机串（`openssl rand -hex 24`）。网关对错误令牌不做次数限制；想要限制，可以在 Cloudflare 里加速率限制规则（免费版是否可用我没有核实）。令牌在 URL 的 `?k=` 里，会出现在访问日志中。
+- 令牌必须是长随机串（`openssl rand -hex 24`）。网关对错误令牌不做次数限制；想要限制，可以在 Cloudflare 里加速率限制规则（免费版是否可用我没有核实）。**设备**令牌在固件请求的 URL `?k=` 里（Worker 也接受 `Authorization: Bearer`，但固件目前不发），会出现在访问日志中；设置页已不再把管理令牌放进请求地址。
+
+- 设备令牌在每台固件里，持有者可以登记编造的设备编号或 WireGuard 公钥。设备列表（8 台）满时，你没动过的设备（没改名、没隧道密钥、没存过图片或设置、没拉黑）会被新来的顶掉，你处理过的设备不会被顶掉；有 20 个隧道申请在等时，最老的一个满一天后会被丢弃，否则新申请得到 `429`。有耐心的攻击者仍可能占满待批条目，发现编造的就在设置页删掉，并更换设备令牌。
 
 ## 设置页
 
-`https://<你的worker>.workers.dev/admin?k=<管理令牌>`，页面上方有导航（概览、语音、机器人、网络、外观），有设置要保存的页签底部会出现保存栏，每一项都有"测试"按钮：
+`https://<你的worker>.workers.dev/admin`。页面本身是不含任何数据的静态文件，它会向你要管理令牌，把令牌放在浏览器标签页里（`sessionStorage`），并用 `Authorization: Bearer` 头发送，所以令牌不会出现在请求地址里。旧的 `/admin?k=<管理令牌>` 书签仍然可用：页面会立刻把令牌从地址栏拿掉（第一次请求仍会以 `?k=` 记入日志）。页面上方有导航（概览、语音、机器人、网络、外观），有设置要保存的页签底部会出现保存栏，每一项都有"测试"按钮：
 
 - **这个网关**：固件里要填的三个地址，Workers AI、Durable Object、管理令牌三个状态。
 - **语音识别**：Cloudflare Workers AI（Whisper large-v3-turbo，免费、不要密钥）或 Azure Speech，和语言。

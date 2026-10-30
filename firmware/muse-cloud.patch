@@ -13634,7 +13634,7 @@ index 2866f5d..d94add4 100644
 +#define FINAL_TIMEOUT_US (20 * 1000000LL)  /* release -> final transcript; longer than a 5 s primary plus most of a 12 s fallback recogniser */
  #define REPLY_TIMEOUT_US (60 * 1000000LL)  /* chat posted -> first assistant message */
 -#define TURN_CAP_US (180 * 1000000LL)
-+#define TURN_CAP_US (300 * 1000000LL)      /* local: raised from 180 s so a long spoken reply isn't cut off */
++#define TURN_CAP_US (360 * 1000000LL)      /* local: raised from 180 s; longer than the gateway's 300 s bot wait plus the spoken reply */
  #define SETTLE_US (3 * 1000000LL)          /* quiet period that ends a turn */
  #define BUSY_HOLD_US (20 * 1000000LL)      /* how long a busy agent keeps it open */
  #define TEXT_REPLY_TIMEOUT_US (5 * 60 * 1000000LL)   /* typed turns: agents can work a while */
@@ -13865,7 +13865,7 @@ index 2866f5d..d94add4 100644
 +    cfg.if_name = const_cast<struct ifreq *>(muse_wg_sta_if());   /* straight out of Wi-Fi, never round by the tunnel */
 +    cfg.crt_bundle_attach = esp_crt_bundle_attach;   /* the gateway is https */
 +    cfg.method = HTTP_METHOD_POST;
-+    cfg.timeout_ms = 300000   /* a cloud bot may take minutes; the gateway speaks an acknowledgement first */;
++    cfg.timeout_ms = 330000   /* a cloud bot may take minutes (the gateway waits 300 s, then sends bot_timeout); the gateway speaks an acknowledgement first */;
 +    esp_http_client_handle_t h = esp_http_client_init(&cfg);
 +    if (h) {
 +        esp_http_client_set_header(h, "Content-Type", "application/json");
